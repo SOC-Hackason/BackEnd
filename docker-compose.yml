@@ -1,0 +1,26 @@
+version: '3.8'
+services:
+  fastapi:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 80 --reload
+    volumes:
+      - ./app:/temp/app
+    ports:
+      - "8000:80"
+    depends_on:
+      - db
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:mailsommelier@db:5432/mydatabase
+      - IS_CLEARDB=True
+
+  db:
+    image: postgres:13
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: mydatabase
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mailsommelier
+
+volumes:
+  postgres_data:
