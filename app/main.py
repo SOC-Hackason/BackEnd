@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import gmail # ルーターモジュールをインポート
 from app.db import database, engine, IS_CLEAR
@@ -23,14 +24,21 @@ async def lifespan(app: FastAPI):
     await database.disconnect()
 
 app = FastAPI(lifespan=lifespan)
+# CORSミドルウェアの追加
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ルーターをアプリケーションに追加
-#app.include_router(gmail.router, prefix="/items", tags=["items"])
+app.include_router(gmail, prefix="/gmail", tags=["gmail"])
 
 @app.get("/")
 async def read_root():
     return {"Hello": "World"}
-
 
 if __name__ == "__main__":
     import uvicorn
