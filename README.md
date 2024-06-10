@@ -38,6 +38,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 80 --reload
 ```
 # 仮想環境の構築（スキップ可）
 python -m venv backend
+.\backend\Script\activate
 # ライブラリのインストール <-　ハイライト用
 pip install -r requirements.txt
 # 起動
