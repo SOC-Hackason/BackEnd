@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]==0.17.6
+pydantic
+sqlalchemy==1.4.36
+asyncpg
+databases[postgresql]==0.5.5
+alembic==1.7.7
+httpx==0.23.0
+python-dotenv==0.20.0
+google-auth==2.6.2
+google-auth-oauthlib==0.4.6
+
