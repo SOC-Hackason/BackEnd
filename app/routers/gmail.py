@@ -6,6 +6,10 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import Flow
 
+
+from sqlalchemy.orm import Session
+from sqlalchemy.future import select
+
 import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -16,7 +20,10 @@ from urllib.parse import quote_plus
 from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI
 from app.schemas import OAuth2Code
 from app.db import get_db
-from sqlalchemy.orm import Session
+
+
+
+from app.models import User_Auth
 
 router = APIRouter()
 
@@ -74,16 +81,40 @@ async def callback(flow: Flow = Depends(get_oauth2_flow), code: str = None, db: 
     if code:
         flow.fetch_token(code=code)
         credentials = flow.credentials
-        # show email address
         headers = {"Authorization":
             f"Bearer {credentials.token}"}
         response = requests.get("https://www.googleapis.com/oauth2/v1/userinfo", headers=headers)
         #TODO dbにmailアドレスリフレッシュトークンを保存する
+        user_auth = User_Auth(email=response.json().get("email"), refresh_token=credentials.refresh_token, access_token=credentials.token)
+        try:
+            db.add(user_auth)
+        except:
+            raise HTTPException(status_code=400, detail="Failed to add user_auth")
+        await db.commit()
         return {"email":response.json().get("email"), "access_token":credentials.token, "refresh_token": credentials.refresh_token}
     return {"message": "Code is required"}
-    
-    
-    
 
+# メールを取得する
+@router.get("/{user_id}/emails")
+async def get_emails(user_id: int, db: Session = Depends(get_db)):
+    query = select(User_Auth).where(User_Auth.id == user_id)
+    result = await db.execute(query)
+    user_auth = result.scalars().first()
+    credentials = Credentials(user_auth.access_token)
+    service = build("gmail", "v1", credentials=credentials)
+    results = service.users().messages().list(userId="me").execute()
+    messages = results.get("messages", [])
+    res = []
+    for message in messages:
+        msg = service.users().messages().get(userId="me", id=message["id"]).execute()
+        res.append(msg)
+        break
+    return res
 
-
+# TODO 絶対消す
+@router.get("/user_auth/all")
+async def get_all_user_auth(db: Session = Depends(get_db)):
+    query = select(User_Auth)
+    result = await db.execute(query)
+    tokens = result.scalars().all()
+    return tokens
