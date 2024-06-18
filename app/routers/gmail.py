@@ -61,7 +61,8 @@ async def code(code: OAuth2Code, flow: Flow = Depends(get_oauth2_flow)):
     code = code.code
     if not code:
         raise HTTPException(status_code=400, detail="Code is required")
-    #FIXME redirect_uri_mismatchエラーが発生する。多分フロントエンドの問題
+    #FIXed エラーの解決　フロントエンドのリダイレクト先と一致しなかったため？
+    flow.redirect_uri = "http://localhost:3000"
     flow.fetch_token(code=code)
     credentials = flow.credentials
     return {"token": credentials.token, "refresh_token": credentials.refresh_token, "token_uri": TOKEN_URI}
