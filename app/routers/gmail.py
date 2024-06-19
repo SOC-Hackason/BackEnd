@@ -129,7 +129,7 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
             user_line = User_Line(id=user_id, line_id=client_id)
             db.add(user_line)
             # 定期的にメールをチェックするようにする
-            backgroud_tasks.add_task(check_mail, user_id)
+            backgroud_tasks.add_task(check_mail, user_id, db)
         except Exception as e:
             print(e)
             raise HTTPException(status_code=400, detail="Failed to add user_auth")
@@ -189,8 +189,8 @@ def parse_message(message):
         "body": body
     }
 
-async def check_mail(user_id: int, db=Depends(get_db)):
-    service = await service_from_userid(user_id)
+async def check_mail(user_id: int, db):
+    service = await service_from_userid(user_id, db)
     while True:
         # pick up the newest mail
         results = service.users().messages().list(userId="me").execute()
