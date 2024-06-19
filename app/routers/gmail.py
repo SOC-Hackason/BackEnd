@@ -1,6 +1,4 @@
-from email import policy
-from email.parser import BytesParser
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request, BackgroundTasks
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import RedirectResponse
 
@@ -16,16 +14,21 @@ import uuid
 
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email import policy
+from email.parser import BytesParser
+
+from asyncio import sleep
 
 import requests
 from urllib.parse import quote_plus
 
-from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI
+from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, LINE_CHANNEL_ACCESS_TOKEN
 from app.schemas import OAuth2Code
 from app.db import get_db
-from app.models import User_Auth, User_Line
+from app.models import User_Auth, User_Line, User_Mail
 
 router = APIRouter()
+backgroud_tasks = BackgroundTasks()
 
 # OAuth2PasswordBearerは、OAuth 2.0トークンを取得するための依存関係を提供します。
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -65,12 +68,26 @@ async def service_from_lineid(line_id: str, db=Depends(get_db)):
     query = select(User_Auth).where(User_Auth.id == user_line.id)
     result = await db.execute(query)
     user_auth = result.scalars().first()
-
     credentials = Credentials(user_auth.access_token)
     service = build("gmail", "v1", credentials=credentials)
     return service
 
-
+async def service_from_userid(user_id: str, db=Depends(get_db)):
+    query = select(User_Auth).where(User_Auth.id == user_id)
+    result = await db.execute(query)
+    user_auth = result.scalars().first()
+    try:
+        credentials = Credentials(user_auth.access_token)
+        service = build("gmail", "v1", credentials=credentials)
+    except Exception as e:
+        # get new access token
+        flow = get_oauth2_flow()
+        flow.fetch_token(refresh_token=user_auth.refresh_token)
+        credentials = flow.credentials
+        user_auth.access_token = credentials.token
+        await db.commit()
+        service = build("gmail", "v1", credentials=credentials)
+    return service
 
 # フロントエンドからのリクエストを受け取り、OAuth2の認証フローを開始する
 @router.post("/code")
@@ -103,7 +120,6 @@ async def callback(request: Request, code: str = None, flow: Flow = Depends(get_
         credentials = flow.credentials
         mail_address = get_email_address(credentials.token)
         user_auth = User_Auth(email=mail_address, refresh_token=credentials.refresh_token, access_token=credentials.token)
-
         try:
             db.add(user_auth)
             await db.flush()
@@ -111,6 +127,8 @@ async def callback(request: Request, code: str = None, flow: Flow = Depends(get_
             client_id = request.session.get("clientid")
             user_line = User_Line(id=user_id, line_id=client_id)
             db.add(user_line)
+            # 定期的にメールをチェックするようにする
+            backgroud_tasks.add_task(check_mail, user_id)
         except Exception as e:
             print(e)
             raise HTTPException(status_code=400, detail="Failed to add user_auth")
@@ -178,3 +196,51 @@ def parse_message(message):
         "date": headers.get("Date"),
         "body": body
     }
+
+async def check_mail(user_id: int):
+    service = service_from_userid(user_id)
+    db = get_db()
+    while True:
+        # pick up the newest mail
+        results = service.users().messages().list(userId="me").execute()
+        messages = results.get("messages", [])
+        for message in messages:
+            # if the mail is already read, skip
+            query = select(User_Mail).where(User_Mail.id == user_id and User_Mail.mail_id == message["id"])
+            result = await db.execute(query)
+            user_mail = result.scalars().first()
+            if user_mail:
+                continue
+            msg = service.users().messages().get(userId="me", id=message["id"], format='raw').execute()
+            mail = parse_message(msg)
+            user_mail = User_Mail(id=user_id, mail_id=message["id"], is_read=False)
+            db.add(user_mail)
+            await db.commit()
+            # send line message
+            # get line id
+            query = select(User_Line).where(User_Line.id == user_id)
+            result = await db.execute(query)
+            user_line = result.scalars().first()
+            line_id = user_line.line_id
+            send_line_message(LINE_CHANNEL_ACCESS_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
+        await sleep(3600)
+
+
+def send_line_message(line_token, user_id, message):
+    url = 'https://api.line.me/v2/bot/message/push'
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {line_token}'
+    }
+    payload = {
+        'to': user_id,  # LINEユーザーIDを指定
+        'messages': [{'type': 'text', 'text': message}]
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        print('Message sent successfully')
+    else:
+        print(f'Failed to send message: {response.status_code}, {response.text}')
+            
+
+            
