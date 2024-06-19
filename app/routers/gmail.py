@@ -28,7 +28,7 @@ from app.db import get_db
 from app.models import User_Auth, User_Line, User_Mail
 
 router = APIRouter()
-backgroud_tasks = BackgroundTasks()
+
 
 # OAuth2PasswordBearerは、OAuth 2.0トークンを取得するための依存関係を提供します。
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -72,7 +72,7 @@ async def service_from_lineid(line_id: str, db=Depends(get_db)):
     service = build("gmail", "v1", credentials=credentials)
     return service
 
-async def service_from_userid(user_id: str, db=Depends(get_db)):
+async def service_from_userid(user_id: str, db:Session=Depends(get_db)):
     query = select(User_Auth).where(User_Auth.id == user_id)
     result = await db.execute(query)
     user_auth = result.scalars().first()
@@ -106,7 +106,8 @@ async def code(code: OAuth2Code, flow: Flow = Depends(get_oauth2_flow)):
 async def auth(request: Request, flow: Flow = Depends(get_oauth2_flow), clientid: str = None):
     authorization_url, state = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="true"
+        include_granted_scopes="true",
+        prompt = "consent",
     )
     # clientidをcookieに保存する
     request.session["clientid"] = clientid
@@ -114,7 +115,7 @@ async def auth(request: Request, flow: Flow = Depends(get_oauth2_flow), clientid
 
 
 @router.get("/callback")
-async def callback(request: Request, code: str = None, flow: Flow = Depends(get_oauth2_flow), db: Session = Depends(get_db)):
+async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str = None, flow: Flow = Depends(get_oauth2_flow), db: Session = Depends(get_db)):
     if code:   
         flow.fetch_token(code=code)
         credentials = flow.credentials
@@ -135,7 +136,7 @@ async def callback(request: Request, code: str = None, flow: Flow = Depends(get_
         
         await db.commit()
 
-        return {"email":mail_address, "access_token":credentials.token, "refresh_token": credentials.refresh_token}
+        return RedirectResponse("line://nv/chat")
     return {"message": "Code is required"}
 
 # メールを取得する
@@ -153,15 +154,6 @@ async def get_emails(mail_nums: int = 1, service=Depends(service_from_lineid)):
         if len(res) == mail_nums:
             break
     return res
-
-
-# TODO 絶対消す
-@router.get("/user_auth/all")
-async def get_all_user_auth(db: Session = Depends(get_db)):
-    query = select(User_Auth)
-    result = await db.execute(query)
-    tokens = result.scalars().all()
-    return tokens
 
 
 def get_email_address(token: str):
@@ -197,9 +189,8 @@ def parse_message(message):
         "body": body
     }
 
-async def check_mail(user_id: int):
-    service = service_from_userid(user_id)
-    db = get_db()
+async def check_mail(user_id: int, db=Depends(get_db)):
+    service = await service_from_userid(user_id)
     while True:
         # pick up the newest mail
         results = service.users().messages().list(userId="me").execute()
