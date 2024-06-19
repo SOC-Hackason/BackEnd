@@ -1,10 +1,13 @@
 from . import Base
-from sqlalchemy import Column, Integer, String, Boolean
+from sqlalchemy import Column, Integer, String, Boolean, PrimaryKeyConstraint
 
 # モデルの作成(User_Mail)
 class User_Mail(Base):
     __tablename__ = "usermail"
-    id = Column(String, primary_key=True, index=True)
-    mail_id = Column(Integer)
+    id = Column(Integer, index=True, primary_key=True)
+    mail_id = Column(String, primary_key=True)
     is_read = Column(Boolean)
+    __table_args__ = (
+        PrimaryKeyConstraint('id', 'mail_id'),
+    )
     

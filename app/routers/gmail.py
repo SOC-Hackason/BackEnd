@@ -8,6 +8,7 @@ from google_auth_oauthlib.flow import Flow
 
 from sqlalchemy.orm import Session
 from sqlalchemy.future import select
+from sqlalchemy import and_
 
 import base64
 import uuid
@@ -22,7 +23,7 @@ from asyncio import sleep
 import requests
 from urllib.parse import quote_plus
 
-from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, LINE_CHANNEL_ACCESS_TOKEN
+from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, LINE_CHANNEL_TOKEN
 from app.schemas import OAuth2Code
 from app.db import get_db
 from app.models import User_Auth, User_Line, User_Mail
@@ -197,7 +198,7 @@ async def check_mail(user_id: int, db):
         messages = results.get("messages", [])
         for message in messages:
             # if the mail is already read, skip
-            query = select(User_Mail).where(User_Mail.id == user_id and User_Mail.mail_id == message["id"])
+            query = select(User_Mail).where(and_(User_Mail.id == user_id,  User_Mail.mail_id == message["id"]))
             result = await db.execute(query)
             user_mail = result.scalars().first()
             if user_mail:
@@ -213,7 +214,7 @@ async def check_mail(user_id: int, db):
             result = await db.execute(query)
             user_line = result.scalars().first()
             line_id = user_line.line_id
-            send_line_message(LINE_CHANNEL_ACCESS_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
+            send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
         await sleep(3600)
 
 
