@@ -1,16 +1,18 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+
 
 from app.routers import gmail # ルーターモジュールをインポート
-from app.db import database, engine, IS_CLEAR
+from app.db import database, engine, IS_CLEARDB
 from app.models import Base
 
 # FastAPIインスタンスが作成されたときにdbと繋いで、インスタンスが終了したときにdbを閉じる
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # データベース接続の開始
-    if IS_CLEAR:
+    if IS_CLEARDB:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
@@ -32,6 +34,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(SessionMiddleware, secret_key="secret")
 
 # ルーターをアプリケーションに追加
 app.include_router(gmail, prefix="/gmail", tags=["gmail"])

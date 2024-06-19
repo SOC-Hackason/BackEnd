@@ -8,13 +8,13 @@ Base = declarative_base()
 # 環境変数からデータベースのURLを取得
 import os
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:mailsommelier@db:5432/mydatabase")
-IS_CLEAR = os.getenv("IS_CLEAR", True)
-if IS_CLEAR == "True" or IS_CLEAR:
-    IS_CLEAR = True
+IS_CLEARDB = os.getenv("IS_CLEARDB", "True")
+if IS_CLEARDB == "True":
+    IS_CLEARDB = True
 else:
-    IS_CLEAR = False
+    IS_CLEARDB = False
 
-print(DATABASE_URL, IS_CLEAR)
+print(DATABASE_URL, IS_CLEARDB)
 
 # SQLAlchemyの設定
 engine = create_async_engine(DATABASE_URL, echo=True)
