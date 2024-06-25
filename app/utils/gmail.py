@@ -70,9 +70,11 @@ def get_message_from_id(service, msg_ids:list):
         for msg_id in msg_ids:
             message = service.users().messages().get(
                 userId='me',
-                id=msg_id
+                id=msg_id,
+                format='raw'
             ).execute()
             messages.append(message)
         return messages
     except Exception as e:
         return None
+

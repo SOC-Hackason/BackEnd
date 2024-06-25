@@ -31,6 +31,7 @@ from app.schemas import OAuth2Code
 from app.db import get_db, get_db_session
 from app.models import User_Auth, User_Line, User_Mail
 from app.utils.gmail import *
+from app.utils.gpt import *
 
 router = APIRouter()
 
@@ -148,12 +149,12 @@ async def auth(request: Request, flow: Flow = Depends(get_oauth2_flow), clientid
 @router.get("/callback")
 async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str = None, flow: Flow = Depends(get_oauth2_flow), db: Session = Depends(get_db)):
     if code:   
-        flow.fetch_token(code=code)
-        credentials = flow.credentials
-        mail_address = get_email_address(credentials.token)
-        # create task for sending mail at notify_time
-        user_auth = User_Auth(email=mail_address, refresh_token=credentials.refresh_token, access_token=credentials.token, notify_time=DEFAULT_DATE_TIME)
         try:
+            flow.fetch_token(code=code)
+            credentials = flow.credentials
+            mail_address = get_email_address(credentials.token)
+            # create task for sending mail at notify_time
+            user_auth = User_Auth(email=mail_address, refresh_token=credentials.refresh_token, access_token=credentials.token, notify_time=DEFAULT_DATE_TIME)
             db.add(user_auth)
             await db.flush()
             user_id = user_auth.id
@@ -169,15 +170,16 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
             backgroud_tasks.add_task(check_mail, user_id, db)
         except Exception as e:
             print(e)
-            raise HTTPException(status_code=400, detail="Failed to add user_auth")
-        
-        await db.commit()
-
-        return RedirectResponse("line://nv/chat")
+            return RedirectResponse("line://nv/chat")
+        try:
+            await db.commit()
+            return RedirectResponse("line://nv/chat")
+        except Exception as e:
+            return RedirectResponse("line://nv/chat")
     return {"message": "Code is required"}
 
 # メールを取得する
-@router.get("/emails/{line_id}")
+@router.get("/emails")
 async def get_emails(mail_nums: int = 1, service=Depends(service_from_lineid)):
     if not service:
         raise HTTPException(status_code=400, detail="Service is required")
@@ -194,12 +196,23 @@ async def get_emails(mail_nums: int = 1, service=Depends(service_from_lineid)):
 
 @router.get("/emails/summary")
 async def get_emails_summary(service=Depends(service_from_lineid)):
+    print(service)
     unread_message = get_unread_message(service)
     if not unread_message:
         raise HTTPException(status_code=400, detail="Failed to get unread message")
     msg_ids = [msg["id"] for msg in unread_message["messages"]]
     messages = get_message_from_id(service, msg_ids)
-    return messages
+    messages = [parse_message(message) for message in messages]
+    res = []
+    for mes in messages:
+        temp = []
+        for k, v in mes.items():
+            if k == "body":
+                temp.append(summarise_email(v))
+            else:
+                temp.append((k, v))
+        res.append(temp)
+    return res
 
 @router.get("/change_time/")
 async def change_time(line_id: int, hour: str, minutes: str , db: Session = Depends(get_db)):
@@ -222,39 +235,6 @@ async def change_time(line_id: int, hour: str, minutes: str , db: Session = Depe
 
 
 
-
-def get_email_address(token: str):
-    headers = {"Authorization":
-        f"Bearer {token}"}
-    response = requests.get("https://www.googleapis.com/oauth2/v1/userinfo", headers=headers)
-    return response.json().get("email")
-
-def parse_message(message):
-    # メッセージのペイロードを取得
-    msg_str = base64.urlsafe_b64decode(message['raw'].encode('ASCII'))
-
-    # メッセージを解析
-    msg = BytesParser(policy=policy.default).parsebytes(msg_str)
-
-    # メッセージのヘッダーと本文を取得
-    headers = dict(msg.items())
-    body = ""
-    if msg.is_multipart():
-        for part in msg.iter_parts():
-            if part.get_content_type() == "text/plain":
-                body = part.get_payload(decode=True).decode()
-                #body = body.replace('\r\n', '\n') 
-    else:
-        body = msg.get_payload(decode=True).decode()
-        #body = body.replace('\r\n', '\n') 
-
-    return {
-        "from": headers.get("From"),
-        "to": headers.get("To"),
-        "subject": headers.get("Subject"),
-        "date": headers.get("Date"),
-        "body": body
-    }
 
 async def notify_mail(user_id: int):
     print("accsess")
@@ -318,6 +298,40 @@ def send_line_message(line_token, user_id, message):
         print('Message sent successfully')
     else:
         print(f'Failed to send message: {response.status_code}, {response.text}')
+
+def parse_message(message):
+    # メッセージのペイロードを取得
+    msg_str = base64.urlsafe_b64decode(message['raw'].encode('ASCII'))
+
+    # メッセージを解析
+    msg = BytesParser(policy=policy.default).parsebytes(msg_str)
+
+    # メッセージのヘッダーと本文を取得
+    headers = dict(msg.items())
+    body = ""
+    if msg.is_multipart():
+        for part in msg.iter_parts():
+            if part.get_content_type() == "text/plain":
+                body = part.get_payload(decode=True).decode()
+                #body = body.replace('\r\n', '\n') 
+            
+    else:
+        body = msg.get_payload(decode=True).decode()
+        #body = body.replace('\r\n', '\n') 
+
+    return {
+        "from": headers.get("From"),
+        "to": headers.get("To"),
+        "subject": headers.get("Subject"),
+        "date": headers.get("Date"),
+        "body": body
+    }
+
+def get_email_address(token: str):
+    headers = {"Authorization":
+        f"Bearer {token}"}
+    response = requests.get("https://www.googleapis.com/oauth2/v1/userinfo", headers=headers)
+    return response.json().get("email")
             
 
             
