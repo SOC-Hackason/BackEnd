@@ -203,16 +203,16 @@ async def get_emails_summary(service=Depends(service_from_lineid)):
     msg_ids = [msg["id"] for msg in unread_message["messages"]]
     messages = get_message_from_id(service, msg_ids)
     messages = [parse_message(message) for message in messages]
-    res = []
-    for mes in messages:
-        temp = []
+    res = summarise_emails([message["body"].strip("\r\n") for message in messages])
+    res.split("\n")
+    answer = ""
+    for mes, re in zip(messages, re):
         for k, v in mes.items():
-            if k == "body":
-                temp.append(summarise_email(v))
+            if k != "body":
+                answer += f"{k}: {v}\n"
             else:
-                temp.append((k, v))
-        res.append(temp)
-    return res
+                answer += f"Summary: {re}\n"
+    return answer
 
 @router.get("/change_time/")
 async def change_time(line_id: int, hour: str, minutes: str , db: Session = Depends(get_db)):
