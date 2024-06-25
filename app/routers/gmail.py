@@ -43,9 +43,11 @@ AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 SCOPES = ["https://mail.google.com/", "openid",  "https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/userinfo.email"]
 
 # メールの通知時間のデフォルト値
-DEFAULT_DATE_TIME = datetime.time(9, 0, 0)
+DEFAULT_DATE_TIME = datetime.time(15, 40, 0)
 # 定期実行用のスケジューラを作成
 scheduler = AsyncIOScheduler()
+scheduler.start()
+
 # OAuth2の認証フローを開始する
 def get_oauth2_flow():
     return Flow.from_client_config(
@@ -149,14 +151,13 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
         credentials = flow.credentials
         mail_address = get_email_address(credentials.token)
         # create task for sending mail at notify_time
-        
         user_auth = User_Auth(email=mail_address, refresh_token=credentials.refresh_token, access_token=credentials.token, notify_time=DEFAULT_DATE_TIME)
         try:
             db.add(user_auth)
             await db.flush()
             user_id = user_auth.id
             # 定期的にメールをチェックするようにする
-            trigger = CronTrigger(hour=DEFAULT_DATE_TIME.hour, minute=DEFAULT_DATE_TIME.minute)
+            trigger = CronTrigger(hour = DEFAULT_DATE_TIME.hour, minute = DEFAULT_DATE_TIME.minute)
             scheduler.add_job(notify_mail, trigger, args=[user_id], id=str(user_id), replace_existing=True)
             client_id = request.session.get("clientid")
             if client_id is None:
@@ -244,7 +245,8 @@ def parse_message(message):
     }
 
 async def notify_mail(user_id: int):
-    db = get_db_session()
+    print("accsess")
+    db = await get_db_session()
     service = await service_from_userid(user_id, db)
     results = service.users().messages().list(userId="me").execute()
     messages = results.get("messages", [])
@@ -257,7 +259,8 @@ async def notify_mail(user_id: int):
         result = await db.execute(query)
         user_line = result.scalars().first()
         line_id = user_line.line_id
-        send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
+        #send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
+        print(f"New mail from {mail['from']}: {mail['subject']}")
 
 async def check_mail(user_id: int, db):
     service = await service_from_userid(user_id, db)
@@ -271,7 +274,7 @@ async def check_mail(user_id: int, db):
             result = await db.execute(query)
             user_mail = result.scalars().first()
             if user_mail:
-                continue
+                break
             msg = service.users().messages().get(userId="me", id=message["id"], format='raw').execute()
             mail = parse_message(msg)
             user_mail = User_Mail(id=user_id, mail_id=message["id"], is_read=False)
@@ -283,7 +286,8 @@ async def check_mail(user_id: int, db):
             result = await db.execute(query)
             user_line = result.scalars().first()
             line_id = user_line.line_id
-            send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
+            #send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
+            print(f"New mail from {mail['from']}: {mail['subject']}")
         await sleep(3600)
 
 

@@ -8,6 +8,8 @@ from app.routers import gmail # ルーターモジュールをインポート
 from app.db import database, engine, IS_CLEARDB
 from app.models import Base
 
+
+
 # FastAPIインスタンスが作成されたときにdbと繋いで、インスタンスが終了したときにdbを閉じる
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -36,6 +38,10 @@ app.add_middleware(
 )
 
 app.add_middleware(SessionMiddleware, secret_key="secret")
+
+import logging
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+logging.getLogger('requests').setLevel(logging.WARNING)
 
 # ルーターをアプリケーションに追加
 app.include_router(gmail, prefix="/gmail", tags=["gmail"])
