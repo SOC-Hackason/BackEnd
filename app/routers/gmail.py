@@ -59,7 +59,7 @@ def get_oauth2_flow():
         redirect_uri=REDIRECT_URI
     )
 
-async def service_from_lineid(line_id: str, db=Depends(get_db)):
+async def service_from_lineid(line_id: str, db: Session =Depends(get_db)):
     query = select(User_Line).where(User_Line.line_id == line_id)
     result = await db.execute(query)
     user_line = result.scalars().first()
