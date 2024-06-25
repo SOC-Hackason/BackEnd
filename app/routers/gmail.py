@@ -12,6 +12,9 @@ from sqlalchemy import and_
 
 import base64
 import uuid
+import datetime
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -25,7 +28,7 @@ from urllib.parse import quote_plus
 
 from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, LINE_CHANNEL_TOKEN
 from app.schemas import OAuth2Code
-from app.db import get_db
+from app.db import get_db, get_db_session
 from app.models import User_Auth, User_Line, User_Mail
 
 router = APIRouter()
@@ -39,6 +42,10 @@ TOKEN_URI = "https://oauth2.googleapis.com/token"
 AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 SCOPES = ["https://mail.google.com/", "openid",  "https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/userinfo.email"]
 
+# メールの通知時間のデフォルト値
+DEFAULT_DATE_TIME = datetime.time(9, 0, 0)
+# 定期実行用のスケジューラを作成
+scheduler = AsyncIOScheduler()
 # OAuth2の認証フローを開始する
 def get_oauth2_flow():
     return Flow.from_client_config(
@@ -72,6 +79,14 @@ def refresh_access_token(refresh_token, client_id=CLIENT_ID, client_secret=CLIEN
     creds.refresh(request)
 
     return creds
+
+async def user_id_from_lineid(line_id: str, db=Depends(get_db)):
+    query = select(User_Line).where(User_Line.line_id == line_id)
+    result = await db.execute(query)
+    user_line = result.scalars().first()
+    if not user_line:
+        return {"message": "User not found"}
+    return user_line.id
 
 async def service_from_lineid(line_id: str, db=Depends(get_db)):
     query = select(User_Line).where(User_Line.line_id == line_id)
@@ -133,11 +148,16 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
         flow.fetch_token(code=code)
         credentials = flow.credentials
         mail_address = get_email_address(credentials.token)
-        user_auth = User_Auth(email=mail_address, refresh_token=credentials.refresh_token, access_token=credentials.token)
+        # create task for sending mail at notify_time
+        
+        user_auth = User_Auth(email=mail_address, refresh_token=credentials.refresh_token, access_token=credentials.token, notify_time=DEFAULT_DATE_TIME)
         try:
             db.add(user_auth)
             await db.flush()
             user_id = user_auth.id
+            # 定期的にメールをチェックするようにする
+            trigger = CronTrigger(hour=DEFAULT_DATE_TIME.hour, minute=DEFAULT_DATE_TIME.minute)
+            scheduler.add_job(notify_mail, trigger, args=[user_id], id=str(user_id), replace_existing=True)
             client_id = request.session.get("clientid")
             if client_id is None:
                 raise Exception("probably secret mode")
@@ -169,6 +189,25 @@ async def get_emails(mail_nums: int = 1, service=Depends(service_from_lineid)):
         if len(res) == mail_nums:
             break
     return res
+
+@router.get("/change_time/")
+async def change_time(line_id: int, hour: str, minutes: str , db: Session = Depends(get_db)):
+    """
+    change notify time
+    """
+    # get user_id from line_id
+    user_id = user_id_from_lineid(line_id, db)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="User not found")
+    query = select(User_Auth).where(User_Auth.id == user_id)
+    result = await db.execute(query)
+    user_auth = result.scalars().first()
+    user_auth.notify_time = datetime.time(int(hour), int(minutes), 0)
+    await db.commit()
+    # update scheduler
+    trigger = CronTrigger(hour=int(hour), minute=int(minutes))
+    scheduler.reschedule_job(str(user_id), trigger)
+    return {"message": "Time changed successfully"}
 
 
 def get_email_address(token: str):
@@ -203,6 +242,22 @@ def parse_message(message):
         "date": headers.get("Date"),
         "body": body
     }
+
+async def notify_mail(user_id: int):
+    db = get_db_session()
+    service = await service_from_userid(user_id, db)
+    results = service.users().messages().list(userId="me").execute()
+    messages = results.get("messages", [])
+    for message in messages:
+        msg = service.users().messages().get(userId="me", id=message["id"], format='raw').execute()
+        mail = parse_message(msg)
+        # send line message
+        # get line id
+        query = select(User_Line).where(User_Line.id == user_id)
+        result = await db.execute(query)
+        user_line = result.scalars().first()
+        line_id = user_line.line_id
+        send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
 
 async def check_mail(user_id: int, db):
     service = await service_from_userid(user_id, db)

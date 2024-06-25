@@ -33,5 +33,7 @@ async def get_db():
     async with SessionLocal() as session:
         yield session
 
+async def get_db_session():
+    return SessionLocal()
 
 
