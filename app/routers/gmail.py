@@ -30,6 +30,7 @@ from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, LINE_CHANNEL_TO
 from app.schemas import OAuth2Code
 from app.db import get_db, get_db_session
 from app.models import User_Auth, User_Line, User_Mail
+from app.utils.gmail import *
 
 router = APIRouter()
 
@@ -190,6 +191,15 @@ async def get_emails(mail_nums: int = 1, service=Depends(service_from_lineid)):
             break
     return res
 
+@router.get("/emails/summary")
+async def get_emails_summary(service=Depends(service_from_lineid)):
+    unread_message = get_unread_message(service)
+    if not unread_message:
+        raise HTTPException(status_code=400, detail="Failed to get unread message")
+    msg_ids = [msg["id"] for msg in unread_message["messages"]]
+    messages = get_message_from_id(service, msg_ids)
+    return messages
+
 @router.get("/change_time/")
 async def change_time(line_id: int, hour: str, minutes: str , db: Session = Depends(get_db)):
     """
@@ -208,6 +218,8 @@ async def change_time(line_id: int, hour: str, minutes: str , db: Session = Depe
     trigger = CronTrigger(hour=int(hour), minute=int(minutes))
     scheduler.reschedule_job(str(user_id), trigger)
     return {"message": "Time changed successfully"}
+
+
 
 
 def get_email_address(token: str):
