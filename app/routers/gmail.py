@@ -59,7 +59,21 @@ def get_oauth2_flow():
         redirect_uri=REDIRECT_URI
     )
 
-async def service_from_lineid(line_id: str, db: Session =Depends(get_db)):
+def refresh_access_token(refresh_token, client_id=CLIENT_ID, client_secret=CLIENT_SECRET, token_uri="https://oauth2.googleapis.com/token"):
+    creds = Credentials(
+        None,
+        refresh_token=refresh_token,
+        token_uri=token_uri,
+        client_id=client_id,
+        client_secret=client_secret
+    )
+
+    request = Request()
+    creds.refresh(request)
+
+    return creds
+
+async def service_from_lineid(line_id: str, db=Depends(get_db)):
     query = select(User_Line).where(User_Line.line_id == line_id)
     result = await db.execute(query)
     user_line = result.scalars().first()
@@ -82,9 +96,7 @@ async def service_from_userid(user_id: str, db:Session=Depends(get_db)):
         service = build("gmail", "v1", credentials=credentials)
     except Exception as e:
         # get new access token
-        flow = get_oauth2_flow()
-        flow.fetch_token(refresh_token=user_auth.refresh_token)
-        credentials = flow.credentials
+        credentials = refresh_access_token(refresh_token=user_auth.refresh_token)
         user_auth.access_token = credentials.token
         await db.commit()
         service = build("gmail", "v1", credentials=credentials)
@@ -127,6 +139,8 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
             await db.flush()
             user_id = user_auth.id
             client_id = request.session.get("clientid")
+            if client_id is None:
+                raise Exception("probably secret mode")
             user_line = User_Line(id=user_id, line_id=client_id)
             db.add(user_line)
             # 定期的にメールをチェックするようにする
