@@ -49,6 +49,9 @@ DEFAULT_DATE_TIME = datetime.time(15, 40, 0)
 # 定期実行用のスケジューラを作成
 scheduler = AsyncIOScheduler()
 scheduler.start()
+# ラベル
+LABELS_CATEGORY = ["WORK/SCHOOL", "SHOPPING", "ADS"]
+LABELS_IMPORTABCE = ["EMERGENCY", "NORMAL", "GARBAGE"]
 
 # OAuth2の認証フローを開始する
 def get_oauth2_flow():
@@ -70,20 +73,6 @@ def get_oauth2_flow():
         redirect_uri=REDIRECT_URI
     )
 
-def refresh_access_token(refresh_token, client_id=CLIENT_ID, client_secret=CLIENT_SECRET, token_uri="https://oauth2.googleapis.com/token"):
-    creds = Credentials(
-        None,
-        refresh_token=refresh_token,
-        token_uri=token_uri,
-        client_id=client_id,
-        client_secret=client_secret
-    )
-
-    request = Request()
-    creds.refresh(request)
-
-    return creds
-
 async def user_id_from_lineid(line_id: str, db=Depends(get_db)):
     query = select(User_Line).where(User_Line.line_id == line_id)
     result = await db.execute(query)
@@ -92,34 +81,41 @@ async def user_id_from_lineid(line_id: str, db=Depends(get_db)):
         return {"message": "User not found"}
     return user_line.id
 
-async def service_from_lineid(line_id: str, db=Depends(get_db)):
-    query = select(User_Line).where(User_Line.line_id == line_id)
+async def line_id_from_userid(user_id: int, db=Depends(get_db)):
+    query = select(User_Line).where(User_Line.id == user_id)
     result = await db.execute(query)
     user_line = result.scalars().first()
     if not user_line:
         return {"message": "User not found"}
-    
-    query = select(User_Auth).where(User_Auth.id == user_line.id)
-    result = await db.execute(query)
-    user_auth = result.scalars().first()
-    credentials = Credentials(user_auth.access_token)
-    service = build("gmail", "v1", credentials=credentials)
-    return service
+    return user_line.line_id
+
 
 async def service_from_userid(user_id: str, db:Session=Depends(get_db)):
     query = select(User_Auth).where(User_Auth.id == user_id)
     result = await db.execute(query)
     user_auth = result.scalars().first()
     try:
-        credentials = Credentials(user_auth.access_token)
+        credentials = Credentials(
+        None,
+        refresh_token=user_auth.refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET
+        )
         service = build("gmail", "v1", credentials=credentials)
+        return service
+    # 来ないでしょ
     except Exception as e:
-        # get new access token
-        credentials = refresh_access_token(refresh_token=user_auth.refresh_token)
-        user_auth.access_token = credentials.token
-        await db.commit()
-        service = build("gmail", "v1", credentials=credentials)
+        print(e)
+        return None
+
+async def service_from_lineid(line_id: str, db=Depends(get_db)):
+    user_id = await user_id_from_lineid(line_id, db)
+    if not user_id:
+        return None
+    service = await service_from_userid(user_id, db)
     return service
+
 
 # フロントエンドからのリクエストを受け取り、OAuth2の認証フローを開始する
 @router.post("/code")
@@ -153,29 +149,36 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
             flow.fetch_token(code=code)
             credentials = flow.credentials
             mail_address = get_email_address(credentials.token)
-            # create task for sending mail at notify_time
+            service = build("gmail", "v1", credentials=credentials)
+            create_label(service, LABELS_CATEGORY+LABELS_IMPORTABCE)
+
             user_auth = User_Auth(email=mail_address, refresh_token=credentials.refresh_token, access_token=credentials.token, notify_time=DEFAULT_DATE_TIME)
             db.add(user_auth)
             await db.flush()
+
             user_id = user_auth.id
-            # 定期的にメールをチェックするようにする
+            
+            # 決まった時間にメールをチェックするようにする
             trigger = CronTrigger(hour = DEFAULT_DATE_TIME.hour, minute = DEFAULT_DATE_TIME.minute)
             scheduler.add_job(notify_mail, trigger, args=[user_id], id=str(user_id), replace_existing=True)
+
             client_id = request.session.get("clientid")
             if client_id is None:
                 raise Exception("probably secret mode")
             user_line = User_Line(id=user_id, line_id=client_id)
             db.add(user_line)
+            await db.flush()
             # 定期的にメールをチェックするようにする
             backgroud_tasks.add_task(check_mail, user_id, db)
+
+            # 結果をコミット
+            await db.commit()
+            return RedirectResponse("line://ti/p/@805iiwyk")
         except Exception as e:
             print(e)
-            return RedirectResponse("line://nv/chat")
-        try:
-            await db.commit()
-            return RedirectResponse("line://nv/chat")
-        except Exception as e:
-            return RedirectResponse("line://nv/chat")
+            await db.rollback()
+            return RedirectResponse("line://ti/p/@805iiwyk")
+        
     return {"message": "Code is required"}
 
 # メールを取得する
@@ -204,15 +207,7 @@ async def get_emails_summary(service=Depends(service_from_lineid)):
     messages = get_message_from_id(service, msg_ids)
     messages = [parse_message(message) for message in messages]
     res = summarise_emails([message["body"].strip("\r\n") for message in messages])
-    res.split("\n")
-    answer = ""
-    for mes, re in zip(messages, re):
-        for k, v in mes.items():
-            if k != "body":
-                answer += f"{k}: {v}\n"
-            else:
-                answer += f"Summary: {re}\n"
-    return answer
+    return res
 
 @router.get("/change_time/")
 async def change_time(line_id: int, hour: str, minutes: str , db: Session = Depends(get_db)):
@@ -234,10 +229,7 @@ async def change_time(line_id: int, hour: str, minutes: str , db: Session = Depe
     return {"message": "Time changed successfully"}
 
 
-
-
 async def notify_mail(user_id: int):
-    print("accsess")
     db = await get_db_session()
     service = await service_from_userid(user_id, db)
     results = service.users().messages().list(userId="me").execute()
@@ -257,30 +249,28 @@ async def notify_mail(user_id: int):
 async def check_mail(user_id: int, db):
     service = await service_from_userid(user_id, db)
     while True:
-        # pick up the newest mail
-        results = service.users().messages().list(userId="me").execute()
-        messages = results.get("messages", [])
-        for message in messages:
+        unread_ids = get_unread_message(service)
+        for id in unread_ids:
             # if the mail is already read, skip
-            query = select(User_Mail).where(and_(User_Mail.id == user_id,  User_Mail.mail_id == message["id"]))
-            result = await db.execute(query)
-            user_mail = result.scalars().first()
-            if user_mail:
-                break
-            msg = service.users().messages().get(userId="me", id=message["id"], format='raw').execute()
+            # システムが過去にメールを見ていないならば
+            
+            user_mail = User_Mail(id=user_id, mail_id=id, is_read=False)
+            try:
+                db.add(user_mail)
+                await db.commit()
+            except Exception as e:
+                await db.rollback()
+                continue
+
+            msg = service.users().messages().get(userId="me", id=id, format='raw').execute()
             mail = parse_message(msg)
-            user_mail = User_Mail(id=user_id, mail_id=message["id"], is_read=False)
-            db.add(user_mail)
-            await db.commit()
             # send line message
             # get line id
-            query = select(User_Line).where(User_Line.id == user_id)
-            result = await db.execute(query)
-            user_line = result.scalars().first()
-            line_id = user_line.line_id
+            line_id = await line_id_from_userid(user_id, db)
             #send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
             print(f"New mail from {mail['from']}: {mail['subject']}")
         await sleep(3600)
+
 
 
 def send_line_message(line_token, user_id, message):

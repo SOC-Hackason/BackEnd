@@ -10,4 +10,7 @@ class User_Mail(Base):
     __table_args__ = (
         PrimaryKeyConstraint('id', 'mail_id'),
     )
+    summary = Column(String)
+    label_content = Column(String)
+    label_name = Column(String)
     
