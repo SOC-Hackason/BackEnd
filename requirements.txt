@@ -12,3 +12,4 @@ google-auth-oauthlib==0.4.6
 google-api-python-client
 itsdangerous==2.2.0
 apscheduler==3.10.4
+aiohttp==3.9.5

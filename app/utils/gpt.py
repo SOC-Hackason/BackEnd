@@ -1,7 +1,8 @@
 import requests
 from app.settings import GPT_TOKEN
+import aiohttp
 
-def summarise_email(email_content, api_key=GPT_TOKEN):
+async def summarise_email(email_content, api_key=GPT_TOKEN):
     url = "https://api.openai.com/v1/chat/completions"
     
     headers = {
@@ -9,11 +10,11 @@ def summarise_email(email_content, api_key=GPT_TOKEN):
         "Authorization": f"Bearer {api_key}"
     }
     
-    system_message = "You are a secretary.You are good at summarizing email.You can summarise your email in no more than three sentences."
-    prompt = f"Summarize the following email in Japanese:\n\n{email_content}"
+    system_message = "You are a secretary. You are good at summarizing email. You can summarize your email in no more than three sentences."
+    prompt = f"Summarize the following email in Japanese. You have to sammarize in Japanese shortly and very briefly like 1 or 2 sentences. In addition, you have to remove url because it may be spam.:\n\n{email_content}"
 
     data = {
-        "model": "gpt-4o",
+        "model": "gpt-3.5-turbo",
         "messages": [
             {"role": "system", "content": system_message},
             {"role": "user", "content": prompt}
@@ -24,13 +25,13 @@ def summarise_email(email_content, api_key=GPT_TOKEN):
         "temperature": 0.7
     }
     
-    response = requests.post(url, headers=headers, json=data)
-    
-    if response.status_code == 200:
-        response_data = response.json()
-        return response_data['choices'][0]['message']['content']
-    else:
-        return f"Error: {response.status_code}, {response.text}"
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=data) as response:
+            if response.status == 200:
+                response_data = await response.json()
+                return response_data['choices'][0]['message']['content']
+            else:
+                return f"Error: {response.status}, {await response.text()}"
 
 def categorize_email(email_content, api_key = GPT_TOKEN):
     url = "https://api.openai.com/v1/chat/completions"

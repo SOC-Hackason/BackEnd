@@ -7,10 +7,10 @@ class User_Mail(Base):
     id = Column(Integer, index=True, primary_key=True)
     mail_id = Column(String, primary_key=True)
     is_read = Column(Boolean)
-    __table_args__ = (
-        PrimaryKeyConstraint('id', 'mail_id'),
-    )
     summary = Column(String)
     label_content = Column(String)
     label_name = Column(String)
+    __table_args__ = (
+        PrimaryKeyConstraint('id', 'mail_id'),
+    )
     

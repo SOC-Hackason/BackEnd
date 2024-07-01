@@ -21,7 +21,7 @@ from email.mime.multipart import MIMEMultipart
 from email import policy
 from email.parser import BytesParser
 
-from asyncio import sleep
+from asyncio import sleep, gather
 
 import requests
 from urllib.parse import quote_plus
@@ -198,16 +198,48 @@ async def get_emails(mail_nums: int = 1, service=Depends(service_from_lineid)):
     return res
 
 @router.get("/emails/summary")
-async def get_emails_summary(service=Depends(service_from_lineid)):
-    print(service)
+async def get_emails_summary(line_id, service=Depends(service_from_lineid), db=Depends(get_db)):
+    user_id = await user_id_from_lineid(line_id, db)
     unread_message = get_unread_message(service)
-    if not unread_message:
-        raise HTTPException(status_code=400, detail="Failed to get unread message")
+    if unread_message['resultSizeEstimate'] == 0:
+        return "No new mail"
     msg_ids = [msg["id"] for msg in unread_message["messages"]]
+
+    # message の　パース
     messages = get_message_from_id(service, msg_ids)
     messages = [parse_message(message) for message in messages]
-    res = summarise_emails([message["body"].strip("\r\n") for message in messages])
-    return res
+
+    # start summarise
+    start = datetime.datetime.now()
+    tasks = [summarise_email(message["body"].strip("\r\n")) for message in messages]
+    summaries = await gather(*tasks)
+
+    # upsert to db
+    user_mails = [User_Mail(id=user_id, mail_id=msg_id, is_read=False, summary=summary) for msg_id, summary in zip(msg_ids, summaries)]
+    tasks = [upsert_mails_to_user_mail(user_mail, db) for user_mail in user_mails]
+    await gather(*tasks)
+    await db.commit()
+
+    print( datetime.datetime.now() - start )
+    #urls = [f"https://mail.google.com/mail/u/{0}/#inbox/{msg_id}" for msg_id in msg_ids]
+    return "\n".join(summaries)
+
+@router.get("/emails/read")
+async def read_emails(line_id, service=Depends(service_from_lineid), db=Depends(get_db)):
+    """summaryで送ったものをすべて既読にする"""
+    # usermailのis_readがFのもののidを取得
+    # それを既読にする
+    user_id = await user_id_from_lineid(line_id, db)
+    query = select(User_Mail).where(and_(User_Mail.id == user_id, User_Mail.is_read == False))
+    result = await db.execute(query)
+    user_mails = result.scalars().all()
+    for user_mail in user_mails:
+        mark_as_read(service, user_mail.mail_id)
+        user_mail.is_read = True
+        await db.commit()
+    return "All mails are read"
+
+
 
 @router.get("/change_time/")
 async def change_time(line_id: int, hour: str, minutes: str , db: Session = Depends(get_db)):
@@ -245,6 +277,7 @@ async def notify_mail(user_id: int):
         line_id = user_line.line_id
         #send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
         print(f"New mail from {mail['from']}: {mail['subject']}")
+
 
 async def check_mail(user_id: int, db):
     service = await service_from_userid(user_id, db)
@@ -322,6 +355,23 @@ def get_email_address(token: str):
         f"Bearer {token}"}
     response = requests.get("https://www.googleapis.com/oauth2/v1/userinfo", headers=headers)
     return response.json().get("email")
+
+async def upsert_mails_to_user_mail(user_mail: User_Mail, db: Session):
+    """
+    add user_mail to db if not exists
+    update user_mail if exists
+    """
+    query = select(User_Mail).where(and_(User_Mail.id == user_mail.id, User_Mail.mail_id == user_mail.mail_id))
+    result = await db.execute(query)
+    bef_user_mail = result.scalars().first()
+    if not bef_user_mail:
+        db.add(user_mail)
+    else:
+        bef_user_mail.is_read = user_mail.is_read
+        bef_user_mail.summary = user_mail.summary
+        bef_user_mail.label_content = user_mail.label_content
+        bef_user_mail.label_name = user_mail.label_name
+
             
 
             

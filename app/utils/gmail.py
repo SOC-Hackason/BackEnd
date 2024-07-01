@@ -122,3 +122,22 @@ def send_gmail_message(service, to, subject, body):
     body = {"raw": raw}
     message = service.users().messages().send(userId="me", body=body).execute()
     return message
+
+def mark_as_read(service, msg_id):
+    """Mark a message as read\n
+    Args:\n
+    service: Gmail service object\n
+    msg_id: The id of the message to be marked as read\n
+    Returns:\n
+    None\n
+    """
+    try:
+        service.users().messages().modify(
+            userId='me',
+            id=msg_id,
+            body={
+                'removeLabelIds': ['UNREAD']
+            }
+        ).execute()
+    except Exception as e:
+        return None
