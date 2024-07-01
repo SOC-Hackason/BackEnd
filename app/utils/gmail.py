@@ -1,6 +1,8 @@
 # util file for gmail api
 from email.mime.text import MIMEText
 import base64
+import asyncio, aiohttp
+import google.auth.transport.requests 
 
 
 def create_label(service, label_names):
@@ -93,7 +95,7 @@ def get_unread_message(service):
     except Exception as e:
         return None
 
-def get_message_from_id(service, msg_ids:list):
+async def get_message_from_id(service, msg_ids:list):
     """Get a message from its id\n
     Args:\n
     service: Gmail service object\n
@@ -101,18 +103,35 @@ def get_message_from_id(service, msg_ids:list):
     Returns:\n
     message: The fetched messages\n
     """
+    tasks = [get_message_from_id_(service, msg_id) for msg_id in msg_ids]
+    messages = await asyncio.gather(*tasks)
+    return messages
+    
+async def get_message_from_id_(service, msg_id):
     try:
-        messages = []
-        for msg_id in msg_ids:
-            message = service.users().messages().get(
-                userId='me',
-                id=msg_id,
-                format='raw'
-            ).execute()
-            messages.append(message)
-        return messages
+        # アクセストークンを取得
+        creds = service._http.credentials
+
+        url = f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}?format=raw'
+        headers = {
+            'Authorization': f'Bearer {creds.token}'
+        }
+
+        async with aiohttp.ClientSession() as session:
+            message = await fetch_message(session, url, headers)
+            return message
     except Exception as e:
+        print(f"An error occurred: {e}")
         return None
+    
+async def fetch_message(session, url, headers):
+    async with session.get(url, headers=headers) as response:
+        if response.status == 200:
+            return await response.json()
+        else:
+            print(f"Failed to fetch message: {response.status}")
+            return None
+
 
 def send_gmail_message(service, to, subject, body):
     message = MIMEText(body)

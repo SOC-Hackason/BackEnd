@@ -168,6 +168,7 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
             user_line = User_Line(id=user_id, line_id=client_id)
             db.add(user_line)
             await db.flush()
+
             # 定期的にメールをチェックするようにする
             backgroud_tasks.add_task(check_mail, user_id, db)
 
@@ -197,36 +198,32 @@ async def get_emails(mail_nums: int = 1, service=Depends(service_from_lineid)):
             break
     return res
 
+# 要約の取得
 @router.get("/emails/summary")
 async def get_emails_summary(line_id, service=Depends(service_from_lineid), db=Depends(get_db)):
+    start = datetime.datetime.now()
     user_id = await user_id_from_lineid(line_id, db)
     unread_message = get_unread_message(service)
     if unread_message['resultSizeEstimate'] == 0:
         return "No new mail"
     msg_ids = [msg["id"] for msg in unread_message["messages"]]
-
     # message の　パース
-    messages = get_message_from_id(service, msg_ids)
-    messages = [parse_message(message) for message in messages]
-
     # start summarise
-    start = datetime.datetime.now()
-    tasks = [summarise_email(message["body"].strip("\r\n")) for message in messages]
+    tasks = [summarise_email_(service, msg_id, db) for msg_id in msg_ids]
     summaries = await gather(*tasks)
-
     # upsert to db
     user_mails = [User_Mail(id=user_id, mail_id=msg_id, is_read=False, summary=summary) for msg_id, summary in zip(msg_ids, summaries)]
     tasks = [upsert_mails_to_user_mail(user_mail, db) for user_mail in user_mails]
     await gather(*tasks)
     await db.commit()
 
-    print( datetime.datetime.now() - start )
+    print(datetime.datetime.now() - start)
     #urls = [f"https://mail.google.com/mail/u/{0}/#inbox/{msg_id}" for msg_id in msg_ids]
-    return "\n".join(summaries)
+    return {"summary": summaries, "urls": msg_ids}
 
 @router.get("/emails/read")
 async def read_emails(line_id, service=Depends(service_from_lineid), db=Depends(get_db)):
-    """summaryで送ったものをすべて既読にする"""
+    """サマリーで送ったものをすべて既読にする"""
     # usermailのis_readがFのもののidを取得
     # それを既読にする
     user_id = await user_id_from_lineid(line_id, db)
@@ -238,7 +235,6 @@ async def read_emails(line_id, service=Depends(service_from_lineid), db=Depends(
         user_mail.is_read = True
         await db.commit()
     return "All mails are read"
-
 
 
 @router.get("/change_time/")
@@ -286,7 +282,6 @@ async def check_mail(user_id: int, db):
         for id in unread_ids:
             # if the mail is already read, skip
             # システムが過去にメールを見ていないならば
-            
             user_mail = User_Mail(id=user_id, mail_id=id, is_read=False)
             try:
                 db.add(user_mail)
@@ -297,11 +292,14 @@ async def check_mail(user_id: int, db):
 
             msg = service.users().messages().get(userId="me", id=id, format='raw').execute()
             mail = parse_message(msg)
+
             # send line message
             # get line id
             line_id = await line_id_from_userid(user_id, db)
-            #send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
-            print(f"New mail from {mail['from']}: {mail['subject']}")
+            if False:
+                send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
+                user_mail.is_read = True
+                await db.commit()
         await sleep(3600)
 
 
@@ -373,5 +371,14 @@ async def upsert_mails_to_user_mail(user_mail: User_Mail, db: Session):
         bef_user_mail.label_name = user_mail.label_name
 
             
-
-            
+async def summarise_email_(service, msg_id, db):
+    # if the email is already summarised, return the summary
+    query = select(User_Mail).where(User_Mail.mail_id == msg_id)
+    result = await db.execute(query)
+    user_mail = result.scalars().first()
+    if user_mail and user_mail.summary:
+        return user_mail.summary
+    else:
+        email_content = await get_message_from_id_(service, msg_id)
+        parsed_message = parse_message(email_content)
+        return await summarise_email(parsed_message)
