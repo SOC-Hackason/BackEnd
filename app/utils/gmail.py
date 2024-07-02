@@ -95,6 +95,7 @@ def get_unread_message(service, max_results=25):
         ).execute()
         return messages
     except Exception as e:
+        print(e)
         return None
 
 async def get_message_from_id(service, msg_ids:list):
@@ -109,6 +110,35 @@ async def get_message_from_id(service, msg_ids:list):
     messages = await asyncio.gather(*tasks)
     return messages
     
+async def get_title_from_ids(service, msg_ids:list):
+    """Get the title of a message from its id\n
+    Args:\n
+    service: Gmail service object\n
+    msg_id: The ids of the message whose title is to be fetched\n
+    Returns:\n
+    titles: The titles of the messages\n
+    """
+    tasks = [get_title_from_id_(service, msg_id) for msg_id in msg_ids]
+    titles = await asyncio.gather(*tasks)
+    return titles
+
+async def get_title_from_id_(service, msg_id):
+    try:
+        # アクセストークンを取得
+        creds = service._http.credentials
+
+        url = f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}?format=metadata'
+        headers = {
+            'Authorization': f'Bearer {creds.token}'
+        }
+
+        async with aiohttp.ClientSession() as session:
+            message = await fetch_message(session, url, headers)
+            return message['payload']['headers'][1]['value']
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
 async def get_message_from_id_(service, msg_id):
     try:
         # アクセストークンを取得
@@ -144,7 +174,7 @@ def send_gmail_message(service, to, subject, body):
     message = service.users().messages().send(userId="me", body=body).execute()
     return message
 
-def mark_as_read(service, msg_id):
+async def mark_as_read(service, msg_id):
     """Mark a message as read\n
     Args:\n
     service: Gmail service object\n
@@ -152,16 +182,21 @@ def mark_as_read(service, msg_id):
     Returns:\n
     None\n
     """
-    try:
-        service.users().messages().modify(
-            userId='me',
-            id=msg_id,
-            body={
-                'removeLabelIds': ['UNREAD']
-            }
-        ).execute()
-    except Exception as e:
-        return None
+    creds = service._http.credentials
+    url = f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}/modify'
+    headers = {
+        'Authorization': f'Bearer {creds.token}',
+        'Content-Type': 'application/json'
+    }
+    data = {
+        "removeLabelIds": ["UNREAD"]
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=data) as response:
+            if response.status == 200:
+                return await response.json()
+            else:
+                return None
     
 async def classify_order(sentence: str):
     class_names = ["summary", "read", "greating", "the other"]

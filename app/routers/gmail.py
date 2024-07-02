@@ -28,7 +28,7 @@ import requests
 from urllib.parse import quote_plus
 
 from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, LINE_CHANNEL_TOKEN
-from app.schemas import OAuth2Code, FreeMessage
+from app.schemas import OAuth2Code, FreeMessage, MailMessages
 from app.db import get_db, get_db_session
 from app.models import User_Auth, User_Line, User_Mail
 from app.utils.gmail import *
@@ -103,6 +103,7 @@ async def service_from_userid(user_id: str, db:Session=Depends(get_db)):
         client_id=CLIENT_ID,
         client_secret=CLIENT_SECRET
         )
+        print(user_auth.refresh_token, "----------------------")
         service = build("gmail", "v1", credentials=credentials)
         return service
     # 来ないでしょ
@@ -149,23 +150,34 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
         try:
             flow.fetch_token(code=code)
             credentials = flow.credentials
+            client_id = request.session.get("clientid")
+            if client_id is None:
+                raise Exception("probably secret mode")
+            
+            # check if the client_id is already registered or not
+            query = select(User_Line).where(User_Line.line_id == client_id)
+            result = await db.execute(query)
+            user_line = result.scalars().first()
+            if user_line:
+                # 既に登録されている場合
+                user_id = await user_id_from_lineid(client_id, db)
+                user_auth = User_Auth(id=user_id, refresh_token=credentials.refresh_token, access_token=credentials.token)
+                await upsert_user_auth(user_auth, db)
+                await db.commit()
+                return RedirectResponse("line://ti/p/@805iiwyk")
+
             mail_address = get_email_address(credentials.token)
             service = build("gmail", "v1", credentials=credentials)
             create_label(service, LABELS_CATEGORY+LABELS_IMPORTABCE)
-
             user_auth = User_Auth(email=mail_address, refresh_token=credentials.refresh_token, access_token=credentials.token, notify_time=DEFAULT_DATE_TIME)
-            db.add(user_auth)
-            await db.flush()
-
+            await upsert_user_auth(user_auth, db)
+            await db.commit()
             user_id = user_auth.id
             
             # 決まった時間にメールをチェックするようにする
             trigger = CronTrigger(hour = DEFAULT_DATE_TIME.hour, minute = DEFAULT_DATE_TIME.minute)
             scheduler.add_job(notify_mail, trigger, args=[user_id], id=str(user_id), replace_existing=True)
 
-            client_id = request.session.get("clientid")
-            if client_id is None:
-                raise Exception("probably secret mode")
             user_line = User_Line(id=user_id, line_id=client_id)
             db.add(user_line)
             await db.flush()
@@ -185,18 +197,12 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
 
 # メールを取得する
 @router.get("/emails")
-async def get_emails(mail_nums: int = 1, service=Depends(service_from_lineid)):
+async def get_emails(msg_id: str, service=Depends(service_from_lineid)):
     if not service:
         raise HTTPException(status_code=400, detail="Service is required")
     
-    results = service.users().messages().list(userId="me").execute()
-    messages = results.get("messages", [])
-    res = []
-    for message in messages:
-        msg = service.users().messages().get(userId="me", id=message["id"], format='raw').execute()
-        res.append(parse_message(msg))
-        if len(res) == mail_nums:
-            break
+    msg = service.users().messages().get(userId="me", id=msg_id, format='raw').execute()
+    res = parse_message(msg)
     return res
 
 # 要約の取得
@@ -205,10 +211,13 @@ async def get_emails_summary(line_id, service=Depends(service_from_lineid), db=D
     start = datetime.datetime.now()
     user_id = await user_id_from_lineid(line_id, db)
     unread_message = get_unread_message(service)
+    if unread_message is None:
+        return {"message": "再認証してみてください。"}
     if unread_message['resultSizeEstimate'] == 0:
-        return {"summary": ["no new mail"]}
+        return {"message": ["no new mail"]}
     # 25件まで取得
     msg_ids = [msg["id"] for msg in unread_message["messages"]]
+    msg_ids = msg_ids[:25]
     # message の　パース
     # start summarise
     tasks = [summarise_email_(service, msg_id, db) for msg_id in msg_ids]
@@ -230,10 +239,8 @@ async def read_emails(line_id, service=Depends(service_from_lineid), db=Depends(
     query = select(User_Mail).where(and_(User_Mail.id == user_id, User_Mail.is_read == False))
     result = await db.execute(query)
     user_mails = result.scalars().all()
-    for user_mail in user_mails:
-        mark_as_read(service, user_mail.mail_id)
-        user_mail.is_read = True
-        await db.commit()
+    tasks = [mark_as_read(service, user_mail.mail_id) for user_mail in user_mails]
+    await gather(*tasks)
     return {"message":"All mails are read"}
 
 
@@ -261,14 +268,25 @@ async def free_sentence(request: FreeMessage, service=Depends(service_from_linei
     sentence = request.sentence
     line_id = request.line_id
     order = await classify_order(sentence)
+    print(order)
     if "summary" in order:
         res = await get_emails_summary(line_id, service, db)
         res["res"] = "summary"
         return res
     elif "read" in order:
-        return await read_emails(line_id, service, db)
+        res = await read_emails(line_id, service, db)
+        res["res"] = "read"
+        return res
+    elif "greating" in order:
+        return {"message": sentence}
     else:
         return {"message": "cant understand your message."}
+
+@router.get("/emails/unread_title", response_model=MailMessages)
+async def get_unread_title(line_id, service=Depends(service_from_lineid)):
+    msg_ids = get_unread_message(service)
+    titles = get_title_from_ids(service, msg_ids)
+    return {"message": titles, "msg_ids": msg_ids}
 
 
 async def notify_mail(user_id: int):
@@ -384,6 +402,21 @@ async def upsert_mails_to_user_mail(user_mail: User_Mail, db: Session):
         bef_user_mail.label_content = user_mail.label_content
         bef_user_mail.label_name = user_mail.label_name
 
+async def upsert_user_auth(user_auth: User_Auth, db: Session):
+    """
+    add user_auth to db if not exists
+    update user_auth if exists
+    """
+    query = select(User_Auth).where(User_Auth.id == user_auth.id)
+    result = await db.execute(query)
+    bef_user_auth = result.scalars().first()
+    if not bef_user_auth:
+        db.add(user_auth)
+    else:
+        bef_user_auth.refresh_token = user_auth.refresh_token
+        bef_user_auth.access_token = user_auth.access_token
+    
+
             
 async def summarise_email_(service, msg_id, db):
     # if the email is already summarised, return the summary
@@ -395,4 +428,5 @@ async def summarise_email_(service, msg_id, db):
     else:
         email_content = await get_message_from_id_(service, msg_id)
         parsed_message = parse_message(email_content)
+        parsed_message["body"] = parsed_message["body"][:500]
         return await summarise_email(parsed_message)
