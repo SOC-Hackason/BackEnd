@@ -1,5 +1,12 @@
 # BackEnd
 ## 起動の仕方(docker)
+BackEnd/app/.envファイルを作成して、次の内容をgcpのcredentialsから入力してください。
+```
+GCP_CLIENT_ID=4095...content.com
+GCP_CLIENT_SECRET=GOCS...J
+GCP_REDIRECT_URI=http://localhost:8000/gmail/callback
+```
+
 ```
 docker-compose up
 ```

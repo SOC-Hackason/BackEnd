@@ -11,7 +11,7 @@ services:
       - db
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:mailsommelier@db:5432/mydatabase
-      - IS_CLEARDB=True
+      - IS_CLEARDB=False
 
   db:
     image: postgres:13
