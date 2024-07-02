@@ -3,6 +3,7 @@ from email.mime.text import MIMEText
 import base64
 import asyncio, aiohttp
 import google.auth.transport.requests 
+from app.utils.gpt import query_gpt3
 
 
 def create_label(service, label_names):
@@ -79,7 +80,7 @@ def add_label_from_name(service, msg_id, label_name):
     except Exception as e:
         return None
     
-def get_unread_message(service):
+def get_unread_message(service, max_results=25):
     """Get all unread messages in the inbox\n
     Args:\n
     service: Gmail service object\n
@@ -89,7 +90,8 @@ def get_unread_message(service):
     try:
         messages = service.users().messages().list(
             userId='me',
-            labelIds=['INBOX', 'UNREAD']
+            labelIds=['INBOX', 'UNREAD'],
+            maxResults=max_results
         ).execute()
         return messages
     except Exception as e:
@@ -160,3 +162,13 @@ def mark_as_read(service, msg_id):
         ).execute()
     except Exception as e:
         return None
+    
+async def classify_order(sentence: str):
+    class_names = ["summary", "read", "greating", "the other"]
+    prompt = f"""\
+    Classify the following sentence into one of the following categories: {",".join(class_names)}. You must return just one category and must not contain any other information. 
+    Exapmle: 1. Sentences: 未読メールを要約して, ようやくして, まとめて, 要約してくれめんす。 \n Category: summary \n 2. Sentence: 既読にして, 全部読んだ, 了解, 把握した \n Category: read  \n 3. Sentence: おはよう, ばいばい, ありがとう Category: greeting
+    4. うるさい, はいはい, いやいや \n Category: the other. では頑張ってください。Sentence: {sentence}"""
+    print(prompt)
+    response = await query_gpt3(prompt)
+    return response

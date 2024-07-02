@@ -1,4 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -49,6 +51,14 @@ app.include_router(gmail, prefix="/gmail", tags=["gmail"])
 @app.get("/")
 async def read_root():
     return {"Hello": "World"}
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    print(exc)  # ログとして例外の詳細を出力
+    return JSONResponse(
+        status_code=422,
+        content={"message": "An error occurred", "details": exc.errors()},
+    )
 
 if __name__ == "__main__":
     import uvicorn

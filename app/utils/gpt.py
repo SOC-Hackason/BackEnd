@@ -2,6 +2,35 @@ import requests
 from app.settings import GPT_TOKEN
 import aiohttp
 
+async def query_gpt3(prompt, api_key=GPT_TOKEN):
+    url = "https://api.openai.com/v1/chat/completions"
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {"role": "system", "content": "You are a secretary. You are good at summarizing email."},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 200,
+        "n": 1,
+        "stop": None,
+        "temperature": 0.7
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=data) as response:
+            if response.status == 200:
+                response_data = await response.json()
+                return response_data['choices'][0]['message']['content']
+            else:
+                return f"Error: {response.status}, {await response.text()}"
+        
+    
 async def summarise_email(email_content, api_key=GPT_TOKEN):
     url = "https://api.openai.com/v1/chat/completions"
     

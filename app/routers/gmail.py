@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException, Depends, Request, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, Request, BackgroundTasks, exception_handlers
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import RedirectResponse
+from fastapi.exceptions import RequestValidationError
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -27,7 +28,7 @@ import requests
 from urllib.parse import quote_plus
 
 from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, LINE_CHANNEL_TOKEN
-from app.schemas import OAuth2Code
+from app.schemas import OAuth2Code, FreeMessage
 from app.db import get_db, get_db_session
 from app.models import User_Auth, User_Line, User_Mail
 from app.utils.gmail import *
@@ -205,7 +206,8 @@ async def get_emails_summary(line_id, service=Depends(service_from_lineid), db=D
     user_id = await user_id_from_lineid(line_id, db)
     unread_message = get_unread_message(service)
     if unread_message['resultSizeEstimate'] == 0:
-        return "No new mail"
+        return {"summary": ["no new mail"]}
+    # 25件まで取得
     msg_ids = [msg["id"] for msg in unread_message["messages"]]
     # message の　パース
     # start summarise
@@ -216,10 +218,8 @@ async def get_emails_summary(line_id, service=Depends(service_from_lineid), db=D
     tasks = [upsert_mails_to_user_mail(user_mail, db) for user_mail in user_mails]
     await gather(*tasks)
     await db.commit()
-
-    print(datetime.datetime.now() - start)
     #urls = [f"https://mail.google.com/mail/u/{0}/#inbox/{msg_id}" for msg_id in msg_ids]
-    return {"summary": summaries, "urls": msg_ids}
+    return {"message": summaries, "msg_ids": msg_ids}
 
 @router.get("/emails/read")
 async def read_emails(line_id, service=Depends(service_from_lineid), db=Depends(get_db)):
@@ -234,7 +234,7 @@ async def read_emails(line_id, service=Depends(service_from_lineid), db=Depends(
         mark_as_read(service, user_mail.mail_id)
         user_mail.is_read = True
         await db.commit()
-    return "All mails are read"
+    return {"message":"All mails are read"}
 
 
 @router.get("/change_time/")
@@ -255,6 +255,20 @@ async def change_time(line_id: int, hour: str, minutes: str , db: Session = Depe
     trigger = CronTrigger(hour=int(hour), minute=int(minutes))
     scheduler.reschedule_job(str(user_id), trigger)
     return {"message": "Time changed successfully"}
+
+@router.post("/free_sentence")
+async def free_sentence(request: FreeMessage, service=Depends(service_from_lineid), db=Depends(get_db)):
+    sentence = request.sentence
+    line_id = request.line_id
+    order = await classify_order(sentence)
+    if "summary" in order:
+        res = await get_emails_summary(line_id, service, db)
+        res["res"] = "summary"
+        return res
+    elif "read" in order:
+        return await read_emails(line_id, service, db)
+    else:
+        return {"message": "cant understand your message."}
 
 
 async def notify_mail(user_id: int):
