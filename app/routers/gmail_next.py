@@ -28,7 +28,7 @@ import requests
 from urllib.parse import quote_plus
 
 from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, LINE_CHANNEL_TOKEN
-from app.schemas import OAuth2Code, FreeMessage
+from app.schemas import OAuth2Code, FreeMessage, MailMessages
 from app.db import get_db, get_db_session
 from app.models import User_Auth, User_Line, User_Mail
 from app.utils.gmail import *
@@ -36,3 +36,30 @@ from app.utils.gpt import *
 
 from app.routers.gmail import router, user_id_from_lineid, line_id_from_userid, service_from_lineid, service_from_userid
 
+
+
+@router.get("/emails/unread_title")
+async def get_unread_title(service=Depends(service_from_lineid)):
+    unread_messages = get_unread_message(service)
+    msg_ids = [msg["id"] for msg in unread_messages["messages"]]
+    titles = await get_title_from_ids(service, msg_ids)
+    return {"message": titles, "msg_ids": msg_ids}
+
+@router.get("/emails/reply")
+async def reply_mail(msg_id: str, order=None, service=Depends(service_from_lineid)):
+    response_body, to, subject, thread_id = await reply_to_message(service, msg_id, order)
+    res  = await make_draft(service, to, subject, response_body, msg_id, thread_id)
+    return {"message": "Draft created", "debug": res}
+
+
+# メールを取得する
+@router.get("/emails")
+async def get_emails(msg_id: str, service=Depends(service_from_lineid)):
+    if not service:
+        raise HTTPException(status_code=400, detail="Service is required")
+    
+    message = await get_message_from_id_async(service, msg_id)
+    message = parse_message(message)
+    return {"from": message["from"], "to": message["to"], "subject": message["subject"], "message": message["body"]}
+
+    

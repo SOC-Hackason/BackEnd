@@ -13,7 +13,7 @@ async def query_gpt3(prompt, api_key=GPT_TOKEN):
     data = {
         "model": "gpt-3.5-turbo",
         "messages": [
-            {"role": "system", "content": "You are a secretary. You are good at summarizing email."},
+            {"role": "system", "content": "You are a nice secretary. You are in charge of everything related to emails."},
             {"role": "user", "content": prompt}
         ],
         "max_tokens": 200,

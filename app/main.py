@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 
-from app.routers import gmail # ルーターモジュールをインポート
+from app.routers import gmail, other # ルーターモジュールをインポート
 from app.db import database, engine, IS_CLEARDB
 from app.models import Base
 
@@ -47,6 +47,7 @@ logging.getLogger('requests').setLevel(logging.WARNING)
 
 # ルーターをアプリケーションに追加
 app.include_router(gmail, prefix="/gmail", tags=["gmail"])
+app.include_router(other, prefix="/other", tags=["other"])
 
 @app.get("/")
 async def read_root():

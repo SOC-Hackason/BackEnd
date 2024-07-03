@@ -103,7 +103,6 @@ async def service_from_userid(user_id: str, db:Session=Depends(get_db)):
         client_id=CLIENT_ID,
         client_secret=CLIENT_SECRET
         )
-        print(user_auth.refresh_token, "----------------------")
         service = build("gmail", "v1", credentials=credentials)
         return service
     # 来ないでしょ
@@ -195,20 +194,12 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
         
     return {"message": "Code is required"}
 
-# メールを取得する
-@router.get("/emails")
-async def get_emails(msg_id: str, service=Depends(service_from_lineid)):
-    if not service:
-        raise HTTPException(status_code=400, detail="Service is required")
-    
-    msg = service.users().messages().get(userId="me", id=msg_id, format='raw').execute()
-    res = parse_message(msg)
-    return res
+
 
 # 要約の取得
 @router.get("/emails/summary")
 async def get_emails_summary(line_id, service=Depends(service_from_lineid), db=Depends(get_db)):
-    start = datetime.datetime.now()
+
     user_id = await user_id_from_lineid(line_id, db)
     unread_message = get_unread_message(service)
     if unread_message is None:
@@ -268,7 +259,6 @@ async def free_sentence(request: FreeMessage, service=Depends(service_from_linei
     sentence = request.sentence
     line_id = request.line_id
     order = await classify_order(sentence)
-    print(order)
     if "summary" in order:
         res = await get_emails_summary(line_id, service, db)
         res["res"] = "summary"
@@ -277,16 +267,12 @@ async def free_sentence(request: FreeMessage, service=Depends(service_from_linei
         res = await read_emails(line_id, service, db)
         res["res"] = "read"
         return res
-    elif "greating" in order:
+    elif "greeting" in order:
         return {"message": sentence}
     else:
         return {"message": "cant understand your message."}
 
-@router.get("/emails/unread_title", response_model=MailMessages)
-async def get_unread_title(line_id, service=Depends(service_from_lineid)):
-    msg_ids = get_unread_message(service)
-    titles = get_title_from_ids(service, msg_ids)
-    return {"message": titles, "msg_ids": msg_ids}
+
 
 
 async def notify_mail(user_id: int):
@@ -351,34 +337,6 @@ def send_line_message(line_token, user_id, message):
         print('Message sent successfully')
     else:
         print(f'Failed to send message: {response.status_code}, {response.text}')
-
-def parse_message(message):
-    # メッセージのペイロードを取得
-    msg_str = base64.urlsafe_b64decode(message['raw'].encode('ASCII'))
-
-    # メッセージを解析
-    msg = BytesParser(policy=policy.default).parsebytes(msg_str)
-
-    # メッセージのヘッダーと本文を取得
-    headers = dict(msg.items())
-    body = ""
-    if msg.is_multipart():
-        for part in msg.iter_parts():
-            if part.get_content_type() == "text/plain":
-                body = part.get_payload(decode=True).decode()
-                #body = body.replace('\r\n', '\n') 
-            
-    else:
-        body = msg.get_payload(decode=True).decode()
-        #body = body.replace('\r\n', '\n') 
-
-    return {
-        "from": headers.get("From"),
-        "to": headers.get("To"),
-        "subject": headers.get("Subject"),
-        "date": headers.get("Date"),
-        "body": body
-    }
 
 def get_email_address(token: str):
     headers = {"Authorization":

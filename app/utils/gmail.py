@@ -3,7 +3,63 @@ from email.mime.text import MIMEText
 import base64
 import asyncio, aiohttp
 import google.auth.transport.requests 
+
 from app.utils.gpt import query_gpt3
+from app.utils.asyncio import run_in_threadpool
+import textwrap
+
+
+
+async def make_draft(service, to, subject, body, reply_to_id, thread_id):
+    message = MIMEText(body)
+    message["to"] = to
+    message["subject"] = subject
+    message["from"] = "me"
+    message["In-Reply-To"] = reply_to_id
+    message["References"] = reply_to_id
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+    body = {"message": {"raw": raw, "threadId": thread_id}}
+    res = service.users().drafts().create(userId="me", body=body).execute()
+    return res
+
+async def reply_to_message(service, msg_id, order="なるべく丁寧に返信してください。"):
+    """
+    get the message from the message id and reply to the message
+    """
+    # run get_message_from_id_sync in threadpool 
+    message = await run_in_threadpool(get_message_from_id_sync, service, msg_id)
+    thread_id = message["threadId"]
+    message = parse_message(message)
+    body = message["body"][:1000]
+    to = message["from"]
+    to_address = get_reply_to(message)
+    subject = message["subject"]
+    escape = lambda x: "{" + x + "}"
+    prompt = textwrap.dedent(
+        f"""Make a template to reply to the following message in the same language as the original message:
+            Subject: {subject}
+            From: {to}
+            Message: {body}
+            Your reply should only include the message body and follow the order: {order}.
+            Here are two examples:
+            - Subject: 提出書類の不備について
+            - From: 田中太郎 (学生教務係)
+            - Message: 申し訳ございませんが、提出書類に不備がありました。再提出をお願いいたします。
+            - Order: なるべく丁寧に返信してください。
+            - Reply: 学生教務係の田中太郎様、ご連絡ありがとうございます。お世話になっております{escape("名前")}です。お手数をおかけいたしますが、{escape("日付")}ごろに再提出させていただきます。
+            ---
+            - Subject: お問い合わせ
+            - From: 田中太郎
+            - Message: 何何の商品について詳しく教えてください。
+            - Order: なるべく丁寧に返信してください。
+            - Reply: 田中様、お問い合わせありがとうございます。商品について詳しくお伝えいたします。{escape("商品名")}は{escape("説明")}です。{escape("価格")}円で販売しております。ご購入をご検討いただければ幸いです。
+                     カタログを添付いたしますので、ご確認ください。何かご不明点がございましたら、お気軽にお問い合わせください。{escape("カタログ")}。
+        """)
+    response = await query_gpt3(prompt)
+    print(response)
+    return response, to_address, subject, thread_id
+        
+                             
 
 
 def create_label(service, label_names):
@@ -118,25 +174,24 @@ async def get_title_from_ids(service, msg_ids:list):
     Returns:\n
     titles: The titles of the messages\n
     """
-    tasks = [get_title_from_id_(service, msg_id) for msg_id in msg_ids]
-    titles = await asyncio.gather(*tasks)
+    messages = await get_message_from_id(service, msg_ids)
+    titles = [parse_message(message)["subject"] for message in messages]
     return titles
 
-async def get_title_from_id_(service, msg_id):
+async def get_message_from_id_async(service, msg_id):
     try:
-        # アクセストークンを取得
-        creds = service._http.credentials
-
-        url = f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}?format=metadata'
-        headers = {
-            'Authorization': f'Bearer {creds.token}'
-        }
-
-        async with aiohttp.ClientSession() as session:
-            message = await fetch_message(session, url, headers)
-            return message['payload']['headers'][1]['value']
+        message = await run_in_threadpool(get_message_from_id_sync, service, msg_id)
+        return message
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(e)
+        return None
+
+def get_message_from_id_sync(service, msg_id):
+    try:
+        message = service.users().messages().get(userId='me', id=msg_id, format="raw").execute()
+        return message
+    except Exception as e:
+        print(e)
         return None
 
 async def get_message_from_id_(service, msg_id):
@@ -161,7 +216,9 @@ async def fetch_message(session, url, headers):
         if response.status == 200:
             return await response.json()
         else:
-            print(f"Failed to fetch message: {response.status}")
+            
+            txt = await response.text()
+            print(f"Failed to fetch message: {txt}")
             return None
 
 
@@ -199,11 +256,97 @@ async def mark_as_read(service, msg_id):
                 return None
     
 async def classify_order(sentence: str):
-    class_names = ["summary", "read", "greating", "the other"]
-    prompt = f"""\
+    class_names = ["summary", "read", "greeting", "the other"]
+    prompt = textwrap.dedent(f"""\
     Classify the following sentence into one of the following categories: {",".join(class_names)}. You must return just one category and must not contain any other information. 
-    Exapmle: 1. Sentences: 未読メールを要約して, ようやくして, まとめて, 要約してくれめんす。 \n Category: summary \n 2. Sentence: 既読にして, 全部読んだ, 了解, 把握した \n Category: read  \n 3. Sentence: おはよう, ばいばい, ありがとう Category: greeting
-    4. うるさい, はいはい, いやいや \n Category: the other. では頑張ってください。Sentence: {sentence}"""
+    Exapmle: 
+    1. - Sentences: 未読メールを要約して, ようやくして, まとめて, 要約してくれめんす。
+    - Category: summary
+    2. - Sentence: 既読にして, 全部読んだ, 了解, 把握した
+     - Category: read 
+    3. - Sentence: おはよう, ばいばい, ありがとう, やあ, こんにちは
+     - Category: greeting
+    4. - Sentence: うるさい, はいはい, いやいや, ajdaf, どうにかして
+     - Category: the other. 
+    では頑張ってください。
+    Sentence: {sentence}""")
     print(prompt)
     response = await query_gpt3(prompt)
     return response
+
+from email.parser import BytesParser
+from email import policy
+import email
+import re
+
+def parse_message(message):
+    """
+    from:
+    to:
+    subject:
+    date:
+    body:
+    """
+    # メッセージのペイロードを取得
+     # メッセージをデコード
+    msg_str = base64.urlsafe_b64decode(message['raw'].encode('ASCII'))
+    mime_msg = email.message_from_bytes(msg_str)
+    headers = {}
+    body = ""
+
+    # ヘッダー情報を取得
+    for header in ['From', 'To', 'Subject', 'Date']:
+        headers[header] = mime_msg[header]
+        if headers[header]:
+            # ヘッダーをデコード
+            headers[header] = email.header.make_header(email.header.decode_header(headers[header]))
+            headers[header] = str(headers[header])
+
+    # メッセージの本文とファイルを取得
+    if mime_msg.is_multipart():
+        for part in mime_msg.walk():
+            content_type = part.get_content_type()
+            content_disposition = str(part.get("Content-Disposition"))
+
+            if content_type == 'text/plain' and 'attachment' not in content_disposition:
+                body = part.get_payload(decode=True).decode('utf-8', errors='ignore')
+                # 改行を統一
+                body = body.replace('\r\n', '')
+            elif content_type == 'text/html' and 'attachment' not in content_disposition and not body:
+                # プレーンテキストが無い場合はHTMLを使用
+                body = part.get_payload(decode=True).decode('utf-8', errors='ignore')
+                # 改行を統一
+                body = body.replace('\r\n', '')
+
+    else:
+        body = mime_msg.get_payload(decode=True).decode('utf-8', errors='ignore')
+        # 改行を統一
+        body = body.replace('\r\n', '')
+
+    body = re.sub(r'[\t\n\r]+', '', body)
+
+
+    return {
+        "from": headers.get("From"),
+        "to": headers.get("To"),
+        "subject": headers.get("Subject"),
+        "date": headers.get("Date"),
+        "body": body,
+    }
+
+def get_reply_to(parsed_email):
+    from_field = parsed_email["from"]
+    
+    # メールアドレスを抽出する正規表現パターン
+    email_pattern = r'[\w\.-]+@[\w\.-]+'
+    
+    # from_fieldからメールアドレスを抽出
+    match = re.search(email_pattern, from_field)
+    
+    if match:
+        return match.group(0)
+    else:
+        # メールアドレスが見つからない場合は元のfromフィールドをそのまま返す
+        return from_field
+
+

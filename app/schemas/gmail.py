@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import List, Dict
 
 class OAuth2Code(BaseModel):
     code: str
@@ -8,5 +9,5 @@ class FreeMessage(BaseModel):
     line_id: str
 
 class MailMessages(BaseModel):
-    message: list[str]
-    msg_ids: list[str]
+    message: List[str]
+    msg_ids: List[Dict[str, str]]
