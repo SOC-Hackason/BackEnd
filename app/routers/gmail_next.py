@@ -33,6 +33,7 @@ from app.db import get_db, get_db_session
 from app.models import User_Auth, User_Line, User_Mail
 from app.utils.gmail import *
 from app.utils.gpt import *
+from app.utils.label import *
 
 from app.routers.gmail import router, user_id_from_lineid, line_id_from_userid, service_from_lineid, service_from_userid
 
@@ -66,16 +67,40 @@ async def get_emails(msg_id: str, service=Depends(service_from_lineid)):
     return {"from": message["from"], "to": message["to"], "subject": message["subject"], "message": message["body"]}
 
 @router.get("/emails/api")
-async def get_emails_api(msg_id: str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+async def get_emails_api(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
     if not service:
         raise HTTPException(status_code=400, detail="Service is required")
     
-    message = await get_message_from_id_async(service, msg_id)
-    message = parse_message(message)
+    user_id = user_id_from_lineid(db, line_id)
+    
+
     
     # msgオブジェクトをデータベースから取得　msg_idが存在しない場合は新規作成
     msg = db.execute(select(User_Mail).filter(User_Mail.msg_id == msg_id)).scalar_one_or_none()
-    # TODO:
+    message = await get_message_from_id_async(service, msg_id)
+    message = parse_message(message)
+    message["body"] = message["body"][:500]
+    
+    if not msg:
+        summary = await summarise_email(message)
+        category, importance = await classificate_email(message)
+        msg = User_Mail(mail_id = msg_id, id=user_id, is_read=True, summary= summary, label_content=category, label_name=importance)
+        db.add(msg)
+        db.commit()
+    else:
+        if msg.label_content is None:
+            category, importance = await classificate_email(message)
+            msg.label_content = category
+            msg.label_name = importance
+        
+        if msg.summary is None:
+            msg.summary = summary
+        
+        db.commit()
+        
+    return {"msg": msg}
+    
+    
     
     
 
