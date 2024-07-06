@@ -36,6 +36,9 @@ from app.utils.gpt import *
 
 from app.routers.gmail import router, user_id_from_lineid, line_id_from_userid, service_from_lineid, service_from_userid
 
+# ラベル
+LABELS_CATEGORY = ["WORK/SCHOOL", "SHOPPING", "ADS"]
+LABELS_IMPORTABCE = ["EMERGENCY", "NORMAL", "GARBAGE"]
 
 
 @router.get("/emails/unread_title")
@@ -62,4 +65,23 @@ async def get_emails(msg_id: str, service=Depends(service_from_lineid)):
     message = parse_message(message)
     return {"from": message["from"], "to": message["to"], "subject": message["subject"], "message": message["body"]}
 
+@router.get("/emails/api")
+async def get_emails_api(msg_id: str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+    if not service:
+        raise HTTPException(status_code=400, detail="Service is required")
     
+    message = await get_message_from_id_async(service, msg_id)
+    message = parse_message(message)
+    
+    # msgオブジェクトをデータベースから取得　msg_idが存在しない場合は新規作成
+    msg = db.execute(select(User_Mail).filter(User_Mail.msg_id == msg_id)).scalar_one_or_none()
+    # TODO:
+    
+    
+
+
+    
+@router.get("/labels/create")
+async def _create_label(service=Depends(service_from_lineid)):
+    create_label(service, LABELS_CATEGORY+LABELS_IMPORTABCE)
+    return {"message": "Labels created"}

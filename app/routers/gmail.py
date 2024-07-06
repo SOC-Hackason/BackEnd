@@ -153,6 +153,10 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
             if client_id is None:
                 raise Exception("probably secret mode")
             
+            # create Labels
+            service = build("gmail", "v1", credentials=credentials)
+            create_label(service, LABELS_CATEGORY+LABELS_IMPORTABCE)
+            
             # check if the client_id is already registered or not
             query = select(User_Line).where(User_Line.line_id == client_id)
             result = await db.execute(query)
@@ -166,20 +170,17 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
                 return RedirectResponse("line://ti/p/@805iiwyk")
 
             mail_address = get_email_address(credentials.token)
-            service = build("gmail", "v1", credentials=credentials)
-            create_label(service, LABELS_CATEGORY+LABELS_IMPORTABCE)
             user_auth = User_Auth(email=mail_address, refresh_token=credentials.refresh_token, access_token=credentials.token, notify_time=DEFAULT_DATE_TIME)
             await upsert_user_auth(user_auth, db)
             await db.commit()
             user_id = user_auth.id
+            user_line = User_Line(id=user_id, line_id=client_id)
+            db.add(user_line)
+            await db.flush()
             
             # 決まった時間にメールをチェックするようにする
             trigger = CronTrigger(hour = DEFAULT_DATE_TIME.hour, minute = DEFAULT_DATE_TIME.minute)
             scheduler.add_job(notify_mail, trigger, args=[user_id], id=str(user_id), replace_existing=True)
-
-            user_line = User_Line(id=user_id, line_id=client_id)
-            db.add(user_line)
-            await db.flush()
 
             # 定期的にメールをチェックするようにする
             backgroud_tasks.add_task(check_mail, user_id, db)

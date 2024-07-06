@@ -1,13 +1,13 @@
 # util file for gmail api
 from email.mime.text import MIMEText
-import base64
+import base64, time
 import asyncio, aiohttp
+import textwrap
+
 import google.auth.transport.requests 
 
 from app.utils.gpt import query_gpt3
 from app.utils.asyncio import run_in_threadpool
-import textwrap
-
 
 
 async def make_draft(service, to, subject, body, reply_to_id, thread_id):
@@ -30,7 +30,7 @@ async def reply_to_message(service, msg_id, order="なるべく丁寧に返信�
     message = await run_in_threadpool(get_message_from_id_sync, service, msg_id)
     thread_id = message["threadId"]
     message = parse_message(message)
-    body = message["body"][:1000]
+    body = message["body"][:500]
     to = message["from"]
     to_address = get_reply_to(message)
     subject = message["subject"]
@@ -82,8 +82,9 @@ def create_label(service, label_names):
                     }
                 ).execute()
             except Exception as e:
-                pass
+                print(e)
     except Exception as e:
+        print(e)
         return None
     
 def get_label_id(service, label_name):
@@ -231,6 +232,7 @@ def send_gmail_message(service, to, subject, body):
     message = service.users().messages().send(userId="me", body=body).execute()
     return message
 
+
 async def mark_as_read(service, msg_id):
     """Mark a message as read\n
     Args:\n
@@ -239,21 +241,18 @@ async def mark_as_read(service, msg_id):
     Returns:\n
     None\n
     """
-    creds = service._http.credentials
-    url = f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}/modify'
-    headers = {
-        'Authorization': f'Bearer {creds.token}',
-        'Content-Type': 'application/json'
-    }
-    data = {
-        "removeLabelIds": ["UNREAD"]
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=data) as response:
-            if response.status == 200:
-                return await response.json()
-            else:
-                return None
+    try:
+        service.users().messages().modify(
+            userId='me',
+            id=msg_id,
+            body={
+                'removeLabelIds': ['UNREAD']
+            }
+        ).execute()
+    except Exception as e:
+        print(e)
+        return None
+    
     
 async def classify_order(sentence: str):
     class_names = ["summary", "read", "greeting", "the other"]

@@ -74,7 +74,6 @@ def categorize_email(email_content, api_key = GPT_TOKEN):
     categories = ["Work", "School", "Social", "Spam", "Other"]
     categories_text = ", ".join(categories)
 
-    prompt = f"Summarize the following email in Japanese:\n\n{email_content}"
     prompt = f"""
     Categorize the following email into one of the following categories: {categories_text}.
     Format the output as:
@@ -85,7 +84,7 @@ def categorize_email(email_content, api_key = GPT_TOKEN):
     """
 
     data = {
-        "model": "gpt-4o",
+        "model": "gpt-3.5-turbo",
         "messages": [
             {"role": "system", "content": system_message},
             {"role": "user", "content": prompt}
@@ -119,7 +118,7 @@ def summarise_emails(mails, api_key=GPT_TOKEN):
         "Authorization": f"Bearer {api_key}"
     }
     
-    system_message = "You are a secretary.You are good at summarizing email.You can summarise your email in no more than three sentences."
+    system_message = "You are a secretary.You are good at summarizing email. You can summarise your email in no more than three sentences."
     prompt =  f"Summarize the following {mail_num} emails in Japanese as shortly as possible:\n\n{email_contents}"
 
    
