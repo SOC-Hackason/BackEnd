@@ -18,19 +18,22 @@ async def make_draft(service, to, subject, body, reply_to_id, thread_id):
     message["In-Reply-To"] = reply_to_id
     message["References"] = reply_to_id
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    body = {"message": {"raw": raw, "threadId": thread_id}}
-    res = service.users().drafts().create(userId="me", body=body).execute()
-    return res
+    body_ = {"message": {"raw": raw, "threadId": thread_id}}
+    service.users().drafts().create(userId="me", body=body_).execute()
+    return body
 
 async def reply_to_message(service, msg_id, order="なるべく丁寧に返信してください。"):
     """
     get the message from the message id and reply to the message
     """
     # run get_message_from_id_sync in threadpool 
+    if order is None:
+        order = "なるべく丁寧に返信してください。"
+    order = order[:100]
     message = await run_in_threadpool(get_message_from_id_sync, service, msg_id)
     thread_id = message["threadId"]
     message = parse_message(message)
-    body = message["body"][:500]
+    body = message["body"][:1000]
     to = message["from"]
     to_address = get_reply_to(message)
     subject = message["subject"]
@@ -46,12 +49,14 @@ async def reply_to_message(service, msg_id, order="なるべく丁寧に返信�
             - From: 田中太郎 (学生教務係)
             - Message: 申し訳ございませんが、提出書類に不備がありました。再提出をお願いいたします。
             - Order: なるべく丁寧に返信してください。
+            And here is the reply:
             - Reply: 学生教務係の田中太郎様、ご連絡ありがとうございます。お世話になっております{escape("名前")}です。お手数をおかけいたしますが、{escape("日付")}ごろに再提出させていただきます。
             ---
             - Subject: お問い合わせ
             - From: 田中太郎
             - Message: 何何の商品について詳しく教えてください。
             - Order: なるべく丁寧に返信してください。
+            And here is the reply:
             - Reply: 田中様、お問い合わせありがとうございます。商品について詳しくお伝えいたします。{escape("商品名")}は{escape("説明")}です。{escape("価格")}円で販売しております。ご購入をご検討いただければ幸いです。
                      カタログを添付いたしますので、ご確認ください。何かご不明点がございましたら、お気軽にお問い合わせください。{escape("カタログ")}。
         """)

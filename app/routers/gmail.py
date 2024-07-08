@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Request, BackgroundTasks, exception_handlers
+from fastapi import APIRouter, HTTPException, Depends, Request, BackgroundTasks, exception_handlers, Query
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import RedirectResponse
 from fastapi.exceptions import RequestValidationError
@@ -26,6 +26,7 @@ from asyncio import sleep, gather
 
 import requests
 from urllib.parse import quote_plus
+from typing import List
 
 from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, LINE_CHANNEL_TOKEN
 from app.schemas import OAuth2Code, FreeMessage, MailMessages
@@ -236,6 +237,12 @@ async def read_emails(line_id, service=Depends(service_from_lineid), db=Depends(
     tasks = [mark_as_read(service, user_mail.mail_id) for user_mail in user_mails]
     await gather(*tasks)
     return {"message":"All mails are read"}
+
+@router.get("/read")
+async def read_mail(msg_ids: List[str]=Query(None), service=Depends(service_from_lineid)):
+    tasks = [mark_as_read(service, msg_id) for msg_id in msg_ids]
+    await gather(*tasks)
+    return {"message": "All mails are read"}
 
 
 @router.get("/change_time/")

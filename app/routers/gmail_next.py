@@ -50,11 +50,11 @@ async def get_unread_title(max_results: int = 12, service=Depends(service_from_l
     titles = await get_title_from_ids(service, msg_ids)
     return {"message": titles, "msg_ids": msg_ids}
 
-@router.get("/emails/reply")
+@router.get("/reply")
 async def reply_mail(msg_id: str, order=None, service=Depends(service_from_lineid)):
     response_body, to, subject, thread_id = await reply_to_message(service, msg_id, order)
-    res  = await make_draft(service, to, subject, response_body, msg_id, thread_id)
-    return {"message": "Draft created", "debug": res}
+    body = await make_draft(service, to, subject, response_body, msg_id, thread_id)
+    return {"message": body}
 
 
 # メールを取得する
