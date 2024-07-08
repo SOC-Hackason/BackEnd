@@ -155,6 +155,24 @@ def get_unread_message(service, max_results=25):
         print(e)
         return None
 
+def get_all_message_ids(service, next_page_token=None):
+    """Get all messages in the inbox\n
+    Args:\n
+    service: Gmail service object\n
+    Returns:\n
+    messages: List of messages' id\n
+    """
+    try:
+        if next_page_token:
+            messages = service.users().messages().list(userId='me', pageToken=next_page_token).execute()
+        else:
+            messages = service.users().messages().list(userId='me').execute()
+        ids = [message['id'] for message in messages['messages']]
+        return ids, messages.get("nextPageToken")
+    except Exception as e:
+        print(e)
+        return None, None
+
 async def get_message_from_id(service, msg_ids:list):
     """Get a message from its id\n
     Args:\n

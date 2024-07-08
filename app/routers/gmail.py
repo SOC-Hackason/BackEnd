@@ -51,7 +51,7 @@ DEFAULT_DATE_TIME = datetime.time(15, 40, 0)
 scheduler = AsyncIOScheduler()
 scheduler.start()
 # ラベル
-LABELS_CATEGORY = ["WORK/SCHOOL", "SHOPPING", "ADS"]
+LABELS_CATEGORY = ["WORK", "SHOOL", "APPOINTMENT", "PROMOTIONS", "SPAM"]
 LABELS_IMPORTABCE = ["EMERGENCY", "NORMAL", "GARBAGE"]
 
 # OAuth2の認証フローを開始する
@@ -103,6 +103,8 @@ async def service_from_userid(user_id: str, db:Session=Depends(get_db)):
         client_id=CLIENT_ID,
         client_secret=CLIENT_SECRET
         )
+        if credentials.expired:
+            credentials.refresh(Request())
         service = build("gmail", "v1", credentials=credentials)
         return service
     # 来ないでしょ
@@ -377,7 +379,7 @@ async def upsert_user_auth(user_auth: User_Auth, db: Session):
     
 
             
-async def summarise_email_(service, msg_id, db):
+async def summarise_email_(service, msg_id, db,  is_read=True):
     # if the email is already summarised, return the summary
     query = select(User_Mail).where(User_Mail.mail_id == msg_id)
     result = await db.execute(query)
@@ -385,7 +387,9 @@ async def summarise_email_(service, msg_id, db):
     if user_mail and user_mail.summary:
         return user_mail.summary
     else:
-        email_content = await get_message_from_id_(service, msg_id)
+        email_content = await get_message_from_id_async(service, msg_id)
         parsed_message = parse_message(email_content)
         parsed_message["body"] = parsed_message["body"][:500]
-        return await summarise_email(parsed_message)
+        summary = await summarise_email(parsed_message)
+        return summary
+        
