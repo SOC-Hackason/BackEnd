@@ -212,7 +212,7 @@ async def get_emails_summary(line_id, service=Depends(service_from_lineid), db=D
         return {"message": ["no new mail"]}
     # 25件まで取得
     msg_ids = [msg["id"] for msg in unread_message["messages"]]
-    msg_ids = msg_ids[:25]
+    msg_ids = msg_ids[:12]
     # message の　パース
     # start summarise
     tasks = [summarise_email_(service, msg_id, db) for msg_id in msg_ids]
@@ -281,8 +281,6 @@ async def free_sentence(request: FreeMessage, service=Depends(service_from_linei
         return {"message": sentence}
     else:
         return {"message": "cant understand your message."}
-
-
 
 
 async def notify_mail(user_id: int):
@@ -394,7 +392,7 @@ async def summarise_email_(service, msg_id, db,  is_read=True):
     if user_mail and user_mail.summary:
         return user_mail.summary
     else:
-        email_content = await get_message_from_id_async(service, msg_id)
+        email_content = await get_message_from_id_(service, msg_id)
         parsed_message = parse_message(email_content)
         parsed_message["body"] = parsed_message["body"][:500]
         summary = await summarise_email(parsed_message)

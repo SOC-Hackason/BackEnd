@@ -216,7 +216,7 @@ def get_message_from_id_sync(service, msg_id):
         return message
     except Exception as e:
         print(e)
-        return None
+        return str(e)
 
 async def get_message_from_id_(service, msg_id):
     try:
