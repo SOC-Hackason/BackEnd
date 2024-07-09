@@ -43,6 +43,7 @@ app.add_middleware(SessionMiddleware, secret_key="secret")
 
 import logging
 logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+logging.getLogger("sqlalchemy.core").setLevel(logging.WARNING)
 logging.getLogger('requests').setLevel(logging.WARNING)
 
 # ルーターをアプリケーションに追加

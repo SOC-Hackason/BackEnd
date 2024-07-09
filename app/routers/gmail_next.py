@@ -56,7 +56,6 @@ async def reply_mail(msg_id: str, order=None, service=Depends(service_from_linei
     body = await make_draft(service, to, subject, response_body, msg_id, thread_id)
     return {"message": body}
 
-
 # メールを取得する
 @router.get("/emails")
 async def get_emails(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
@@ -65,12 +64,10 @@ async def get_emails(msg_id: str, line_id:str, service=Depends(service_from_line
     msg, _from, _to, _subject = await get_emails_summary_importance(msg_id, line_id, service, db)
     return {"from": _from, "to": _to, "subject": _subject, "message": msg.summary, "category": msg.label_content, "importance": msg.label_name}
 
-
 @router.get("/emails/ids")
 async def get_email_ids(service=Depends(service_from_lineid), next_page_token:str=None):
     ids, next_page_token = get_all_message_ids(service)
     return {"message": ids, "next_page_token": next_page_token}
-    
     
 @router.get("/vectorize")
 async def vectorize_email_api(msg_id:str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
@@ -80,13 +77,20 @@ async def vectorize_email_api(msg_id:str, line_id:str, service=Depends(service_f
     res = await vectorize_email(message)
     return {"vector": res, "message": message}
     
+@router.get("/block_address")
+async def block_address(line_id: str, address: str, service=Depends(service_from_lineid)):
+    await block_address_(service, address)
+    return {"message": "blocked"}
 
+@router.get("/unblock_address")
+async def unblock_address(address: str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+    await unblock_address_(service, address)
+    return {"message": "unblocked"}
 
-    
-@router.get("/labels/create")
-async def _create_label(service=Depends(service_from_lineid)):
-    create_label(service, LABELS_CATEGORY+LABELS_IMPORTABCE)
-    return {"message": "Labels created"}
+@router.get("/recent_addresses")
+async def get_recent_addresses(service=Depends(service_from_lineid)):
+    addresses = await get_recent_addresses_(service)
+    return {"message": addresses}
 
 
 async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):

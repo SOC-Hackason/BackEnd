@@ -64,7 +64,73 @@ async def reply_to_message(service, msg_id, order="なるべく丁寧に返信�
     print(response)
     return response, to_address, subject, thread_id
         
-                             
+
+async def block_address_(service, address):
+    """Block an email address\n
+    Args:\n
+    service: Gmail service object\n
+    address: The email address to be blocked\n
+    Returns:\n
+    None\n
+    """
+    try:
+        f = service.users().settings().filters().create(
+            userId='me',
+            body={
+                "criteria": {
+                    "from": address
+                },
+                "action": {
+                    "removeLabelIds": [],
+                    "addLabelIds": ["SPAM"]
+                }
+            }
+        )
+        await run_in_threadpool(f.execute)
+    except Exception as e:
+        print(e)
+        return None
+    
+async def unblock_address_(service, address):
+    """Unblock an email address\n
+    Args:\n
+    service: Gmail service object\n
+    address: The email address to be unblocked\n
+    Returns:\n
+    None\n
+    """
+    try:
+        f = service.users().settings().filters().delete(
+            userId='me',
+            id=address
+        )
+        await run_in_threadpool(f.execute)
+    except Exception as e:
+        print(e)
+        return None
+    
+async def get_recent_addresses_(service, max_results=10):
+    """Get the received emails's address\n
+    Args:\n
+    service: Gmail service object\n
+    Returns:\n
+    addresses: List of recent addresses\n
+    """
+    try:
+        f = service.users().messages().list(
+            userId='me',
+            labelIds=['INBOX'],
+            maxResults=max_results
+        ).execute
+        message_ids = await run_in_threadpool(f)
+        tasks = [get_message_from_id_(service, message_id["id"]) for message_id in message_ids["messages"]]
+        messages = await asyncio.gather(*tasks)
+        parsed_messages = [parse_message(message) for message in messages]
+        addresses = [parsed_message["from"] for parsed_message in parsed_messages]
+        return list(set(addresses))
+    except Exception as e:
+        print(e)
+        return None
 
 
 def create_label(service, label_names):
@@ -218,12 +284,12 @@ def get_message_from_id_sync(service, msg_id):
         print(e)
         return str(e)
 
-async def get_message_from_id_(service, msg_id):
+async def get_message_from_id_(service, msg_id, format="raw"):
     try:
         # アクセストークンを取得
         creds = service._http.credentials
 
-        url = f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}?format=raw'
+        url = f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}?format={format}'
         headers = {
             'Authorization': f'Bearer {creds.token}'
         }
