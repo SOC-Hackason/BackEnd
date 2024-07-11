@@ -6,8 +6,11 @@ import textwrap
 
 from app.utils.gpt import query_gpt3
 from app.utils.asyncio import run_in_threadpool
+from app.utils.ml import get_ml_results
 
 from app.routers.gmail import LABELS_CATEGORY, LABELS_IMPORTABCE
+
+TOPIC_CATEGORY =  ["Appointment", "Promotion", "School", "Work"]
 
 async def classificate_email(msg:str):
     msg["body"] = msg["body"][:500]
@@ -47,10 +50,29 @@ async def classificate_email(msg:str):
         importance = "GARBAGE"
     else:
         importance = "NORMAL"
-    
-    
+
     return category, importance
         
+async def classificate_with_ml(msg:str, preferences:dict = {"Work": 0.25, "School": 0.25, "Appointment": 0.25, "Promotion": 0.25}):
+    ham_score, topic = await run_in_threadpool(get_ml_results, msg)
+    if ham_score < 0.5:
+        category = "SPAM"
+    else:
+        category = TOPIC_CATEGORY[topic.argmax()]
+    
+    importance_by_topic = ham_score * topic
+    importance_by_preference = [importance_by_topic[i] * preferences[TOPIC_CATEGORY[i]] for i in range(4)]
+
+    if sum(importance_by_preference) < 0.5:
+        importance = "GARBAGE"
+    elif sum(importance_by_preference) < 0.8:
+        importance = "NORMAL"
+    else:
+        importance = "EMERGENCY"
+
+    return category, importance
+
+
 async def vectorize_email(msg:str):
     prompt = textwrap.dedent(f"""
         Vectorize the following email in Japanese. You have to vectorize the email based on the content of the email.

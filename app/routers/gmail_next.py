@@ -36,7 +36,6 @@ from app.utils.gpt import *
 from app.utils.label import *
 
 from app.routers.gmail import router, user_id_from_lineid, line_id_from_userid, service_from_lineid, service_from_userid, summarise_email_, upsert_mails_to_user_mail
-
 # ラベル
 LABELS_CATEGORY = ["WORK/SCHOOL", "SHOPPING", "ADS"]
 LABELS_IMPORTABCE = ["EMERGENCY", "NORMAL", "GARBAGE"]
@@ -62,6 +61,13 @@ async def get_emails(msg_id: str, line_id:str, service=Depends(service_from_line
     if not service:
         raise HTTPException(status_code=400, detail="Service is required")
     msg, _from, _to, _subject = await get_emails_summary_importance(msg_id, line_id, service, db)
+    return {"from": _from, "to": _to, "subject": _subject, "message": msg.summary, "category": msg.label_content, "importance": msg.label_name}
+
+@router.get("/emails_ml")
+async def get_emails_ml(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+    if not service:
+        raise HTTPException(status_code=400, detail="Service is required")
+    msg, _from, _to, _subject = await get_emails_summary_importance_ml(msg_id, line_id, service, db)
     return {"from": _from, "to": _to, "subject": _subject, "message": msg.summary, "category": msg.label_content, "importance": msg.label_name}
 
 @router.get("/emails/ids")
@@ -93,6 +99,7 @@ async def get_recent_addresses(service=Depends(service_from_lineid)):
     return {"message": addresses}
 
 
+
 async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
     
     user_id = await user_id_from_lineid(line_id, db)
@@ -122,6 +129,39 @@ async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depend
         if msg.summary is None:
             msg.summary = await summarise_email(message)
         
+        await db.commit()
+        
+    return msg, _from, _to, _subject
+
+async def get_emails_summary_importance_ml(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+    
+    user_id = await user_id_from_lineid(line_id, db)
+    
+    # msgオブジェクトをデータベースから取得　msg_idが存在しない場合は新規作成
+    msg = await db.execute(select(User_Mail).filter(User_Mail.mail_id == msg_id))
+    msg = msg.scalars().first()
+    message = await get_message_from_id_async(service, msg_id)
+    message = parse_message(message)
+    message["body"] = message["body"][:700]
+    _from = message["from"]
+    _to = message["to"]
+    _subject = message["subject"]
+    
+    if not msg:
+        summary = await summarise_email(message)
+        category, importance = await classificate_with_ml(summary)
+        msg = User_Mail(mail_id = msg_id, id=user_id, is_read=True, summary= summary, label_content=category, label_name=importance)
+        db.add(msg)
+        await db.commit()
+    else:
+        if msg.summary is None:
+            msg.summary = await summarise_email(message)
+
+        category, importance = await classificate_with_ml(msg.summary)
+        msg.label_content = category
+        msg.label_name = importance
+        
+
         await db.commit()
         
     return msg, _from, _to, _subject
