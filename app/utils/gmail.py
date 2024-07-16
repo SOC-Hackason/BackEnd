@@ -81,8 +81,8 @@ async def block_address_(service, address):
                     "from": address
                 },
                 "action": {
-                    "removeLabelIds": [],
-                    "addLabelIds": ["SPAM"]
+                    "removeLabelIds": ["INBOX"],
+                    "addLabelIds": []
                 }
             }
         )
@@ -193,6 +193,30 @@ def add_label(service, msg_id, label_id):
         ).execute()
     except Exception as e:
         return None
+    
+
+async def remove_all_labels(service, msg_id):
+    """Remove all labels from a message\n
+    Args:\n
+    service: Gmail service object\n
+    msg_id: The id of the message from which all labels are to be removed\n
+    Returns:\n
+    None\n"""
+    try:
+        msg_label_ids = service.users().messages().get(userId='me', id=msg_id).execute()['labelIds']
+        # extract user labels
+        msg_label_ids = [label_id for label_id in msg_label_ids if label_id.startswith("Label_")]
+        f = service.users().messages().modify(
+            userId='me',
+            id=msg_id,
+            body={
+                'removeLabelIds': msg_label_ids
+            }
+        ).execute
+        await run_in_threadpool(f)
+        return "success" + str(msg_label_ids) 
+    except Exception as e:
+        return str(e)
     
 def add_label_from_name(service, msg_id, label_name):
     """Add a label to a message\n

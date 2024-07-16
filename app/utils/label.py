@@ -8,7 +8,9 @@ from app.utils.gpt import query_gpt3
 from app.utils.asyncio import run_in_threadpool
 from app.utils.ml import get_ml_results
 
-from app.routers.gmail import LABELS_CATEGORY, LABELS_IMPORTABCE
+from app.models import User_Weight
+
+from app.routers.gmail import LABELS_CATEGORY, LABELS_IMPORTANCE
 
 TOPIC_CATEGORY =  ["Appointment", "Promotion", "School", "Work"]
 
@@ -16,7 +18,7 @@ async def classificate_email(msg:str):
     msg["body"] = msg["body"][:500]
     prompt = textwrap.dedent(f"""
         Classificate the following email in Japanese. You have to classify the email into the following categories:
-        {LABELS_CATEGORY}, {LABELS_IMPORTABCE}.
+        {LABELS_CATEGORY}, {LABELS_IMPORTANCE}.
         Your classification should be based on the content of the email. Here are some examples:
         - Email xx xx様 LINEヤフー株式会社 新卒採用担当です。 マイページへメッセージを送信しましたので ログインして内容をご確認下さい。
         - Reply "WORK, EMERGENCY"
@@ -52,6 +54,28 @@ async def classificate_email(msg:str):
         importance = "NORMAL"
 
     return category, importance
+
+async def get_user_weight(userid, db):
+    user_weight = db.query(User_Weight).filter(User_Weight.user_id == userid).first()
+    if not user_weight:
+        init_dic = {"Work": 0.25, "School": 0.25, "Appointment": 0.25, "Promotion": 0.25}
+        large_binary = base64.b64encode(str(init_dic).encode())
+        user_weight = User_Weight(user_id=userid, model_weight = large_binary)
+        db.add(user_weight)
+        await db.commit()
+        user_weight = user_weight.model_weight
+    else:
+        user_weight = user_weight.model_weight
+        user_weight = base64.b64decode(user_weight)
+    return user_weight
+
+async def set_user_weight(userid, weight, db):
+    weight = base64.b64encode(str(weight).encode())
+    user_weight = db.query(User_Weight).filter(User_Weight.user_id == userid).first()
+    user_weight.model_weight = weight
+    await db.commit()
+
+
         
 async def classificate_with_ml(msg:str, preferences:dict = {"Work": 0.25, "School": 0.25, "Appointment": 0.25, "Promotion": 0.25}):
     ham_score, topic = await run_in_threadpool(get_ml_results, msg)

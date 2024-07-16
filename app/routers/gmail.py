@@ -14,6 +14,7 @@ from sqlalchemy import and_
 import base64
 import uuid
 import datetime
+import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -23,6 +24,7 @@ from email import policy
 from email.parser import BytesParser
 
 from asyncio import sleep, gather
+import asyncio
 
 import requests
 from urllib.parse import quote_plus
@@ -34,6 +36,7 @@ from app.db import get_db, get_db_session
 from app.models import User_Auth, User_Line, User_Mail
 from app.utils.gmail import *
 from app.utils.gpt import *
+from app.utils.linebot import list_message
 
 router = APIRouter()
 
@@ -44,16 +47,20 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 # クライアントIDとクライアントシークレットの設定
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
-SCOPES = ["https://mail.google.com/", "openid",  "https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/userinfo.email"]
+SCOPES = ["https://mail.google.com/", "openid",  "https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/gmail.settings.sharing", "https://www.googleapis.com/auth/gmail.settings.basic", "https://www.googleapis.com/auth/gmail.settings.basic"]
 
 # メールの通知時間のデフォルト値
 DEFAULT_DATE_TIME = datetime.time(15, 40, 0)
 # 定期実行用のスケジューラを作成
 scheduler = AsyncIOScheduler()
 scheduler.start()
+# 東京のタイムゾーンを設定
+japan_tz = pytz.timezone('Asia/Tokyo')
+
 # ラベル
-LABELS_CATEGORY = ["WORK", "SHOOL", "APPOINTMENT", "PROMOTIONS", "SPAM"]
-LABELS_IMPORTABCE = ["EMERGENCY", "NORMAL", "GARBAGE"]
+LABELS_CATEGORY = ["WORK", "SCHOOL", "APPOINTMENT", "PROMOTIONS", "SPAM"]
+LABELS_IMPORTANCE = ["EMERGENCY", "NORMAL", "GARBAGE"]
+LEARNING_RATE = 0.05
 
 # OAuth2の認証フローを開始する
 def get_oauth2_flow():
@@ -158,7 +165,7 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
             
             # create Labels
             service = build("gmail", "v1", credentials=credentials)
-            create_label(service, LABELS_CATEGORY+LABELS_IMPORTABCE)
+            create_label(service, LABELS_CATEGORY+LABELS_IMPORTANCE)
             
             # check if the client_id is already registered or not
             query = select(User_Line).where(User_Line.line_id == client_id)
@@ -167,6 +174,9 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
             if user_line:
                 # 既に登録されている場合
                 user_id = await user_id_from_lineid(client_id, db)
+                trigger = CronTrigger(hour = DEFAULT_DATE_TIME.hour, minute = DEFAULT_DATE_TIME.minute, timezone=japan_tz)
+                scheduler.add_job(notify_mail, trigger, args=[user_id], id=str(user_id), replace_existing=True)
+
                 user_auth = User_Auth(id=user_id, refresh_token=credentials.refresh_token, access_token=credentials.token)
                 await upsert_user_auth(user_auth, db)
                 await db.commit()
@@ -246,22 +256,25 @@ async def read_mail(msg_ids: List[str]=Query(None), service=Depends(service_from
 
 
 @router.get("/change_time/")
-async def change_time(line_id: int, hour: str, minutes: str , db: Session = Depends(get_db)):
+async def change_time(line_id: str, hour: str, minute: str , db: Session = Depends(get_db)):
     """
     change notify time
     """
-    # get user_id from line_id
-    user_id = user_id_from_lineid(line_id, db)
+    user_id =  await user_id_from_lineid(line_id, db)
     if not user_id:
         raise HTTPException(status_code=400, detail="User not found")
     query = select(User_Auth).where(User_Auth.id == user_id)
     result = await db.execute(query)
     user_auth = result.scalars().first()
-    user_auth.notify_time = datetime.time(int(hour), int(minutes), 0)
+    user_auth.notify_time = datetime.time(int(hour), int(minute), 0)
     await db.commit()
     # update scheduler
-    trigger = CronTrigger(hour=int(hour), minute=int(minutes))
-    scheduler.reschedule_job(str(user_id), trigger)
+    job = scheduler.get_job(str(user_id))
+    if job:
+        job.reschedule(CronTrigger(hour = int(hour), minute = int(minute), timezone=japan_tz))
+    else:
+        trigger = CronTrigger(hour = int(hour), minute = int(minute), timezone=japan_tz)
+        scheduler.add_job(notify_mail, trigger, args=[user_id], id=str(user_id), replace_existing=True)
     return {"message": "Time changed successfully"}
 
 @router.post("/free_sentence")
@@ -282,23 +295,27 @@ async def free_sentence(request: FreeMessage, service=Depends(service_from_linei
     else:
         return {"message": "cant understand your message."}
 
-
 async def notify_mail(user_id: int):
-    db = await get_db_session()
-    service = await service_from_userid(user_id, db)
-    results = service.users().messages().list(userId="me").execute()
-    messages = results.get("messages", [])
-    for message in messages:
-        msg = service.users().messages().get(userId="me", id=message["id"], format='raw').execute()
-        mail = parse_message(msg)
-        # send line message
-        # get line id
-        query = select(User_Line).where(User_Line.id == user_id)
-        result = await db.execute(query)
-        user_line = result.scalars().first()
-        line_id = user_line.line_id
-        #send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
-        print(f"New mail from {mail['from']}: {mail['subject']}")
+    line_id = None
+    service = None
+    async for db in get_db():
+        line_id = await line_id_from_userid(user_id, db)
+        service = await service_from_userid(user_id, db)
+    messages = await list_message(service)
+    print(LINE_CHANNEL_TOKEN)
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {LINE_CHANNEL_TOKEN}'
+    }
+    payload = {
+        'to': line_id,  # LINEユーザーIDを指定
+        'messages': messages
+    }
+    response = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload)
+    if response.status_code == 200:
+        print('Message sent successfully')
+    else:
+        print(f'Failed to send message: {response.status_code}, {response.text}')
 
 
 async def check_mail(user_id: int, db):
