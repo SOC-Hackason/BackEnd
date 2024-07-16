@@ -85,7 +85,11 @@ async def get_emails_ml(msg_id: str, line_id:str, label_type:str, label:int, ser
     msg = msg["body"][:1000]
 
     if label_type == "importance":
-        await add_label_from_name(service, msg_id, LABELS_IMPORTANCE[label])
+        await remove_all_labels(service, msg_id)
+        add_label_from_name(service, msg_id, LABELS_IMPORTANCE[label])
+        msg = await db.execute(select(User_Mail).filter(User_Mail.mail_id == msg_id))
+        msg.label_name = LABELS_IMPORTANCE[label]
+        await db.commit()
         user_weight = await get_user_weight(user_id)
         topic_vector = await run_in_threadpool(get_ml_results, msg)
         importance_by_preference = [topic_vector[i] * user_weight[TOPIC_CATEGORY[i]] for i in range(4)]
@@ -102,9 +106,15 @@ async def get_emails_ml(msg_id: str, line_id:str, label_type:str, label:int, ser
         await set_user_weight(user_id, user_weight, db)
     else:
         label = LABELS_CATEGORY[label]
-        await add_label_from_name(service, msg_id, label)
+        await remove_all_labels(service, msg_id)
+        add_label_from_name(service, msg_id, label)
+        msg = await db.execute(select(User_Mail).filter(User_Mail.mail_id == msg_id))
+        msg.label_content = label
+        await db.commit()
         with open("app/labels_content.txt", "a") as f:
             f.write(f"{msg_id}, {msg}, {label}\n")
+        
+    return {"message": "success"}
     
 @router.get("/emails_dev")
 async def get_emails_dev(line_id:str, msg_id:str=None, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
