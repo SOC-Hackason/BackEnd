@@ -47,10 +47,18 @@ async def list_message(service, max_results=12):
 
     bubble = {
         "type": "bubble",
-        "hedder": {
-            "type": "text",
-            "text": "本日のメール一覧(通知)",
-            "weight": "bold",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "メール一覧(通知)",
+                    "weight": "bold",
+                    "size": "xl",
+                    "align": "center"
+                }
+            ]
         },
         "body": {
             "type": "box",
