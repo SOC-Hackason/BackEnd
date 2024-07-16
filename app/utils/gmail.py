@@ -248,7 +248,7 @@ def get_unread_message(service, max_results=25):
         return messages
     except Exception as e:
         print(e)
-        return None
+        return e
 
 def get_all_message_ids(service, next_page_token=None):
     """Get all messages in the inbox\n

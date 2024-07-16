@@ -58,7 +58,7 @@ scheduler.start()
 japan_tz = pytz.timezone('Asia/Tokyo')
 
 # ラベル
-LABELS_CATEGORY = ["WORK", "SCHOOL", "APPOINTMENT", "PROMOTIONS", "SPAM"]
+LABELS_CATEGORY = ["WORK", "SCHOOL", "APPOINTMENT", "PROMOTIONS", "OTHER"]
 LABELS_IMPORTANCE = ["EMERGENCY", "NORMAL", "GARBAGE"]
 LEARNING_RATE = 0.05
 
@@ -398,8 +398,6 @@ async def upsert_user_auth(user_auth: User_Auth, db: Session):
     else:
         bef_user_auth.refresh_token = user_auth.refresh_token
         bef_user_auth.access_token = user_auth.access_token
-    
-
             
 async def summarise_email_(service, msg_id, db,  is_read=True):
     # if the email is already summarised, return the summary

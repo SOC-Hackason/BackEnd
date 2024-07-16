@@ -87,12 +87,12 @@ async def get_emails_ml(msg_id: str, line_id:str, label_type:str, label:int, ser
     if label_type == "importance":
         await remove_all_labels(service, msg_id)
         add_label_from_name(service, msg_id, LABELS_IMPORTANCE[label])
-        msg = await db.execute(select(User_Mail).filter(User_Mail.mail_id == msg_id))
-        msg.label_name = LABELS_IMPORTANCE[label]
+        msg_o = await db.execute(select(User_Mail).filter(User_Mail.mail_id == msg_id))
+        msg_o.label_name = LABELS_IMPORTANCE[label]
         await db.commit()
-        user_weight = await get_user_weight(user_id)
+        user_weight = await get_user_weight(user_id, db)
         topic_vector = await run_in_threadpool(get_ml_results, msg)
-        importance_by_preference = [topic_vector[i] * user_weight[TOPIC_CATEGORY[i]] for i in range(4)]
+        importance_by_preference = [topic_vector[1][i] * user_weight[TOPIC_CATEGORY[i]] * topic_vector[0] for i in range(4)]
         now_importance = sum(importance_by_preference)
         if label == 0:
             af_importance = 0.25
@@ -102,14 +102,14 @@ async def get_emails_ml(msg_id: str, line_id:str, label_type:str, label:int, ser
             af_importance = 0.9
         # パーセプトロンみたいな更新
         for i in range(4):
-            user_weight[TOPIC_CATEGORY[i]] += 0.1 * (af_importance - now_importance) * topic_vector[i]
+            user_weight[TOPIC_CATEGORY[i]] += 0.1 * (af_importance - now_importance) * topic_vector[1][i]
         await set_user_weight(user_id, user_weight, db)
     else:
         label = LABELS_CATEGORY[label]
         await remove_all_labels(service, msg_id)
         add_label_from_name(service, msg_id, label)
-        msg = await db.execute(select(User_Mail).filter(User_Mail.mail_id == msg_id))
-        msg.label_content = label
+        msg_o = await db.execute(select(User_Mail).filter(User_Mail.mail_id == msg_id))
+        msg_o.label_content = label
         await db.commit()
         with open("app/labels_content.txt", "a") as f:
             f.write(f"{msg_id}, {msg}, {label}\n")

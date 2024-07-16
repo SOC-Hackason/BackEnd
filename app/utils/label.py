@@ -1,7 +1,10 @@
 from email.mime.text import MIMEText
-import base64, time
+import base64, time, json
 import asyncio, aiohttp
 import textwrap
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
 
 from app.utils.gpt import query_gpt3
@@ -27,7 +30,7 @@ async def classificate_email(msg:str):
         - Email xx xx様 xx大学教務係です。xx xxさんの学生証が見つかりました。お手数ですが、教務係までお越しいただき、お受け取りください。
         - Reply "SCHOOL, EMERGENCY"
         - Email xx xx様 新商品の案内です。
-        - Reply "ADS, GARBAGE"
+        - Reply "PROMOTIONS, GARBAGE"
         Let's classify the following email:
         {msg}
         """)
@@ -55,23 +58,25 @@ async def classificate_email(msg:str):
 
     return category, importance
 
-async def get_user_weight(userid, db):
-    user_weight = db.query(User_Weight).filter(User_Weight.user_id == userid).first()
+async def get_user_weight(userid, db: AsyncSession):
+    user_weight = await db.execute(select(User_Weight).filter(User_Weight.id == userid))
+    user_weight = user_weight.scalars().first()
     if not user_weight:
         init_dic = {"Work": 0.25, "School": 0.25, "Appointment": 0.25, "Promotion": 0.25}
-        large_binary = base64.b64encode(str(init_dic).encode())
-        user_weight = User_Weight(user_id=userid, model_weight = large_binary)
+        json_str = json.dumps(init_dic)
+        user_weight = User_Weight(id=userid, model_weight = base64.b64encode(json_str.encode()))
         db.add(user_weight)
         await db.commit()
-        user_weight = user_weight.model_weight
+        user_weight = init_dic
     else:
-        user_weight = user_weight.model_weight
-        user_weight = base64.b64decode(user_weight)
+        json_dict = base64.b64decode(user_weight.model_weight).decode()
+        user_weight = json.loads(json_dict)
     return user_weight
 
 async def set_user_weight(userid, weight, db):
     weight = base64.b64encode(str(weight).encode())
-    user_weight = db.query(User_Weight).filter(User_Weight.user_id == userid).first()
+    user_weight = await db.execute(select(User_Weight).filter(User_Weight.id == userid))
+    user_weight = user_weight.scalars().first()
     user_weight.model_weight = weight
     await db.commit()
 
