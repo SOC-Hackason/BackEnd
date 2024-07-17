@@ -45,14 +45,25 @@ if os.path.exists("app/labeled_msg_ids.txt"):
 msg_labels_importance = {}
 msg_labels_content = {}
 
+# cheating
+enlanguage_user = set()
 
 @router.get("/unread_titles")
-async def get_unread_title(max_results: int = 12, service=Depends(service_from_lineid)):
+async def get_unread_title(background_tasks: BackgroundTasks, line_id:str, max_results: int = 12, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
     unread_messages = get_unread_message(service)
     msg_ids = [msg["id"] for msg in unread_messages["messages"]]
     msg_ids = msg_ids[:max_results]
     titles = await get_title_from_ids(service, msg_ids)
+    # classify
+    for msg_id in msg_ids:
+        asyncio.create_task(classify_email(msg_id, line_id, service, db))
+
     return {"message": titles, "msg_ids": msg_ids}
+
+async def classify_email(msg_id, line_id, service, db):
+    msg, _from, _to, _subject = await get_emails_summary_importance(msg_id, line_id, service, db)
+    await add_label_from_name_async(service, msg_id, msg.label_content)
+    await add_label_from_name_async(service, msg_id, msg.label_name)
 
 @router.get("/reply")
 async def reply_mail(msg_id: str, order=None, service=Depends(service_from_lineid)):
@@ -65,6 +76,7 @@ async def reply_mail(msg_id: str, order=None, service=Depends(service_from_linei
 async def get_emails(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
     if not service:
         raise HTTPException(status_code=400, detail="Service is required")
+    # activate service
     msg, _from, _to, _subject = await get_emails_summary_importance(msg_id, line_id, service, db)
     return {"from": _from, "to": _to, "subject": _subject, "message": msg.summary, "category": msg.label_content, "importance": msg.label_name}
 
@@ -85,36 +97,42 @@ async def get_emails_ml(msg_id: str, line_id:str, label_type:str, label:int, ser
     msg = msg["body"][:1000]
 
     if label_type == "importance":
+        # label
         await remove_all_labels(service, msg_id)
         add_label_from_name(service, msg_id, LABELS_IMPORTANCE[label])
+
+        # update db
         msg_o = await db.execute(select(User_Mail).filter(User_Mail.mail_id == msg_id))
+        msg_o = msg_o.scalars().first()
         msg_o.label_name = LABELS_IMPORTANCE[label]
         await db.commit()
+        
+        # update user_weight
         user_weight = await get_user_weight(user_id, db)
         topic_vector = await run_in_threadpool(get_ml_results, msg)
         importance_by_preference = [topic_vector[1][i] * user_weight[TOPIC_CATEGORY[i]] * topic_vector[0] for i in range(4)]
         now_importance = sum(importance_by_preference)
-        if label == 0:
-            af_importance = 0.25
-        elif label == 1:
-            af_importance = 0.7
-        else:
-            af_importance = 0.9
+        af_importance = convert_label_index_to_importance(label)
         # パーセプトロンみたいな更新
         for i in range(4):
             user_weight[TOPIC_CATEGORY[i]] += 0.1 * (af_importance - now_importance) * topic_vector[1][i]
         await set_user_weight(user_id, user_weight, db)
+
     else:
+        # label
         label = LABELS_CATEGORY[label]
         await remove_all_labels(service, msg_id)
         add_label_from_name(service, msg_id, label)
+        # update db
         msg_o = await db.execute(select(User_Mail).filter(User_Mail.mail_id == msg_id))
+        msg_o = msg_o.scalars().first()
         msg_o.label_content = label
         await db.commit()
+        # save labeled_msg_ids to a file
         with open("app/labels_content.txt", "a") as f:
             f.write(f"{msg_id}, {msg}, {label}\n")
         
-    return {"message": "success"}
+    return {"message": f"ラベルの変更に成功しました。"}
     
 @router.get("/emails_dev")
 async def get_emails_dev(line_id:str, msg_id:str=None, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
@@ -170,6 +188,15 @@ async def update_emails_label(line_id:str, label:int, message_id:str, label_type
 async def get_email_ids(service=Depends(service_from_lineid), next_page_token:str=None):
     ids, next_page_token = get_all_message_ids(service)
     return {"message": ids, "next_page_token": next_page_token}
+
+@router.get("/change_language")
+async def change_language(line_id:str, language:str, db: Session = Depends(get_db_session)):
+    user_id = await user_id_from_lineid(line_id, db)
+    if language == "English":
+        enlanguage_user.add(user_id)
+    else:
+        enlanguage_user.discard(user_id)
+    return {"message": "success"}
     
 @router.get("/vectorize")
 async def vectorize_email_api(msg_id:str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
@@ -194,7 +221,7 @@ async def get_recent_addresses(service=Depends(service_from_lineid)):
     addresses = await get_recent_addresses_(service)
     return {"message": addresses}
 
-async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session), is_summarise: bool = True):
     
     user_id = await user_id_from_lineid(line_id, db)
     
@@ -208,8 +235,13 @@ async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depend
     _to = message["to"]
     _subject = message["subject"]
     
+    language = "English" if user_id in enlanguage_user else "Japanese"
+    
     if not msg:
-        summary = await summarise_email(message)
+        if is_summarise:
+            summary = await summarise_email(message, language)
+        else:
+            summary = None
         category, importance = await classificate_email(message)
         msg = User_Mail(mail_id = msg_id, id=user_id, is_read=True, summary= summary, label_content=category, label_name=importance)
         db.add(msg)
@@ -220,8 +252,8 @@ async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depend
             msg.label_content = category
             msg.label_name = importance
         
-        if msg.summary is None:
-            msg.summary = await summarise_email(message)
+        if msg.summary is None and is_summarise:
+            msg.summary = await summarise_email(message, language)
         
         await db.commit()
         
@@ -240,16 +272,17 @@ async def get_emails_summary_importance_ml(msg_id: str, line_id:str, service=Dep
     _from = message["from"]
     _to = message["to"]
     _subject = message["subject"]
+    language = "English" if user_id in enlanguage_user else "Japanese"
     
     if not msg:
-        summary = await summarise_email(message)
+        summary = await summarise_email(message, language)
         category, importance = await classificate_with_ml(summary)
         msg = User_Mail(mail_id = msg_id, id=user_id, is_read=True, summary= summary, label_content=category, label_name=importance)
         db.add(msg)
         await db.commit()
     else:
         if msg.summary is None:
-            msg.summary = await summarise_email(message)
+            msg.summary = await summarise_email(message, language)
 
         category, importance = await classificate_with_ml(msg.summary)
         msg.label_content = category

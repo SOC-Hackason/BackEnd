@@ -6,6 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import Flow
+from google.auth.transport.requests import Request as RequestGoogle
 
 from sqlalchemy.orm import Session
 from sqlalchemy.future import select
@@ -105,14 +106,17 @@ async def service_from_userid(user_id: str, db:Session=Depends(get_db)):
     user_auth = result.scalars().first()
     try:
         credentials = Credentials(
-        None,
+        token=user_auth.access_token,
         refresh_token=user_auth.refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=CLIENT_ID,
         client_secret=CLIENT_SECRET
         )
         if credentials.expired:
-            credentials.refresh(Request())
+            credentials.refresh(RequestGoogle())
+            print("refreshed--------------")
+            user_auth.access_token = credentials.token
+            await db.commit()
         service = build("gmail", "v1", credentials=credentials)
         return service
     # 来ないでしょ

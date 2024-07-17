@@ -131,6 +131,37 @@ async def get_recent_addresses_(service, max_results=10):
     except Exception as e:
         print(e)
         return None
+    
+async def add_label_from_name_async(service, msg_id, label_name):
+    """Add a label to a message\n
+    Args:\n
+    service: Gmail service object\n
+    msg_id: The id of the message to which the label is to be added\n
+    label_name: The name of the label to be added\n
+    Returns:\n
+    None\n"""
+    # use aiohttp to make the request
+    try:
+        label_id = get_label_id(service, label_name)
+        # aiohttp
+        url = f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}/modify'
+        headers = {
+            'Authorization': f'Bearer {service._http.credentials.token}'
+        }
+
+        data = {
+            'addLabelIds': [label_id]
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=data) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    return await response.text()
+    except Exception as e:
+        return str(e)
+    
 
 
 def create_label(service, label_names):
@@ -294,11 +325,30 @@ async def get_title_from_ids(service, msg_ids:list):
 
 async def get_message_from_id_async(service, msg_id):
     try:
-        message = await run_in_threadpool(get_message_from_id_sync, service, msg_id)
-        return message
+        # use aiohttp to make the request 
+        # to get raw message
+        creds = service._http.credentials
+        url = f'https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}?format=raw'
+        headers = {
+            'Authorization': f'Bearer {creds.token}'
+        }
+
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    credentials = service._http.credentials
+                    print(credentials.expired)
+                    print(credentials.valid)
+                    print(credentials.token)
+                    return service.users().messages().get(userId='me', id=msg_id, format="raw").execute()
     except Exception as e:
         print(e)
-        return None
+        return str(e)
+    
+
 
 def get_message_from_id_sync(service, msg_id):
     try:

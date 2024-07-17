@@ -58,6 +58,15 @@ async def classificate_email(msg:str):
 
     return category, importance
 
+def convert_label_index_to_importance(label_index):
+    if label_index == 0:
+        af_importance = 0.25
+    elif label_index == 1:
+        af_importance = 0.7
+    else:
+        af_importance = 0.9
+    return af_importance
+
 async def get_user_weight(userid, db: AsyncSession):
     user_weight = await db.execute(select(User_Weight).filter(User_Weight.id == userid))
     user_weight = user_weight.scalars().first()
@@ -74,10 +83,11 @@ async def get_user_weight(userid, db: AsyncSession):
     return user_weight
 
 async def set_user_weight(userid, weight, db):
-    weight = base64.b64encode(str(weight).encode())
+    json_str = json.dumps(weight)
+    str_weight = base64.b64encode(json_str.encode())
     user_weight = await db.execute(select(User_Weight).filter(User_Weight.id == userid))
     user_weight = user_weight.scalars().first()
-    user_weight.model_weight = weight
+    user_weight.model_weight = str_weight
     await db.commit()
 
 

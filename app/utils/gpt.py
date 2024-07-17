@@ -31,7 +31,7 @@ async def query_gpt3(prompt, api_key=GPT_TOKEN):
                 return f"Error: {response.status}, {await response.text()}"
         
     
-async def summarise_email(email_content, api_key=GPT_TOKEN):
+async def summarise_email(email_content, api_key=GPT_TOKEN, language="Japanese"):
     url = "https://api.openai.com/v1/chat/completions"
     
     headers = {
@@ -40,7 +40,7 @@ async def summarise_email(email_content, api_key=GPT_TOKEN):
     }
     
     system_message = "You are a secretary. You are good at summarizing email. You can summarize your email in no more than three sentences."
-    prompt = f"Summarize the following email in Japanese. You have to sammarize in Japanese shortly and very briefly like 1 or 2 sentences. In addition, you have to remove url because it may be spam.:\n\n{email_content}"
+    prompt = f"Summarize the following email in {language}. You have to sammarize in {language} shortly and very briefly like 1 or 2 sentences. In addition, you have to remove url because it may be spam.:\n\n{email_content}"
 
     data = {
         "model": "gpt-3.5-turbo",
