@@ -349,9 +349,6 @@ async def get_message_from_id_async(service, msg_id):
                     return await response.json()
                 elif not response.status == 404:
                     credentials = service._http.credentials
-                    print(credentials.expired)
-                    print(credentials.valid)
-                    print(credentials.token)
                     return service.users().messages().get(userId='me', id=msg_id, format="raw").execute()
     except Exception as e:
         print(e)

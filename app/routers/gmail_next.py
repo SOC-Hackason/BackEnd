@@ -35,7 +35,7 @@ from app.utils.gmail import *
 from app.utils.gpt import *
 from app.utils.label import *
 
-from app.routers.gmail import router, user_id_from_lineid, line_id_from_userid, service_from_lineid, service_from_userid, summarise_email_, upsert_mails_to_user_mail
+from app.routers.gmail import router, user_id_from_lineid, line_id_from_userid, service_from_lineid, service_from_userid, summarise_email_, upsert_mails_to_user_mail, user_language
 
 #
 labeled_msg_ids = set()
@@ -47,7 +47,7 @@ msg_labels_importance = {}
 msg_labels_content = {}
 
 # cheating
-user_language = ddict(lambda: "Japanese")
+
 user_block_address = ddict(set)
 
 @router.get("/unread_titles")
@@ -168,6 +168,9 @@ async def get_emails_ml(msg_id: str, line_id:str, label_type:str, label:int, ser
         for i in range(4):
             user_weight[TOPIC_CATEGORY[i]] += 0.1 * (af_importance - now_importance) * topic_vector[1][i]
         await set_user_weight(user_id, user_weight, db)
+
+        with open("app/labels_importance.txt", "a") as f:
+            f.write(f"{msg_id}, {msg}, {LABELS_IMPORTANCE[label]}\n")
 
     else:
         # label
@@ -307,7 +310,7 @@ async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depend
             msg.label_content = category
             msg.label_name = importance
         
-        if is_summarise:
+        if is_summarise and msg.summary is None:
             msg.summary = await summarise_email(message, language=language)
         
         await db.commit()

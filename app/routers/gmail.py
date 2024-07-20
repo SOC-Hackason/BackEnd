@@ -27,6 +27,7 @@ from email.parser import BytesParser
 from asyncio import sleep, gather
 import asyncio
 import aiohttp
+from collections import defaultdict as ddict
 
 import requests
 from urllib.parse import quote_plus
@@ -38,7 +39,7 @@ from app.db import get_db, get_db_session
 from app.models import User_Auth, User_Line, User_Mail
 from app.utils.gmail import *
 from app.utils.gpt import *
-from app.utils.linebot import list_message
+from app.utils.linebot import list_message, flex_one_mail
 
 router = APIRouter()
 
@@ -63,6 +64,9 @@ japan_tz = pytz.timezone('Asia/Tokyo')
 LABELS_CATEGORY = ["WORK", "SCHOOL", "APPOINTMENT", "PROMOTIONS", "OTHER"]
 LABELS_IMPORTANCE = ["EMERGENCY", "NORMAL", "GARBAGE"]
 LEARNING_RATE = 0.05
+
+# 言語設定
+user_language = ddict(lambda: "Japanese")
 
 # OAuth2の認証フローを開始する
 def get_oauth2_flow():
@@ -182,7 +186,7 @@ async def callback(backgroud_tasks: BackgroundTasks, request: Request, code: str
                 user_id = await user_id_from_lineid(client_id, db)
                 trigger = CronTrigger(hour = DEFAULT_DATE_TIME.hour, minute = DEFAULT_DATE_TIME.minute, timezone=japan_tz)
                 scheduler.add_job(notify_mail, trigger, args=[user_id], id=str(user_id), replace_existing=True)
-
+                backgroud_tasks.add_task(check_mail, user_id, db)
                 user_auth = User_Auth(id=user_id, refresh_token=credentials.refresh_token, access_token=credentials.token)
                 await upsert_user_auth(user_auth, db)
                 await db.commit()
@@ -323,11 +327,12 @@ async def notify_mail(user_id: int):
     else:
         print(f'Failed to send message: {response.status_code}, {response.text}')
 
-
 async def check_mail(user_id: int, db):
-    service = await service_from_userid(user_id, db)
     while True:
+        service = await service_from_userid(user_id, db)
         unread_ids = get_unread_message(service)
+        unread_ids = [msg["id"] for msg in unread_ids["messages"]]
+        
         for id in unread_ids:
             # if the mail is already read, skip
             # システムが過去にメールを見ていないならば
@@ -341,15 +346,35 @@ async def check_mail(user_id: int, db):
 
             msg = service.users().messages().get(userId="me", id=id, format='raw').execute()
             mail = parse_message(msg)
-
-            # send line message
-            # get line id
             line_id = await line_id_from_userid(user_id, db)
-            if False:
-                send_line_message(LINE_CHANNEL_TOKEN, line_id, f"New mail from {mail['from']}: {mail['subject']}")
-                user_mail.is_read = True
-                await db.commit()
-        await sleep(3600)
+
+            if "重要" in mail["subject"]:
+                language = user_language[user_id]
+                summary = await summarise_email(mail, language=language)
+                importance = "EMERGENCY"
+                contents = "WORK"
+                _from = mail["from"]
+                _to = mail["to"]
+                _subject = mail["subject"]
+                data = {"from": _from, "to": _to, "subject": _subject, "message": summary, "category": contents, "importance": importance, "is_English": user_language[user_id] != "Japanese"}
+                messages = flex_one_mail(data, id)
+                headers = {
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {LINE_CHANNEL_TOKEN}'
+                }
+                payload = {
+                    'to': line_id,  # LINEユーザーIDを指定
+                    'messages': messages
+                }
+                response = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload)
+                if response.status_code == 200:
+                    print('Message sent successfully')
+                else:
+                    print(f'Failed to send message: {response.status_code}, {response.text}')
+            else:
+                pass
+            
+        await sleep(60)
 
 
 

@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
@@ -49,6 +50,9 @@ logging.getLogger('requests').setLevel(logging.WARNING)
 # ルーターをアプリケーションに追加
 app.include_router(gmail, prefix="/gmail", tags=["gmail"])
 app.include_router(other, prefix="/other", tags=["other"])
+
+# static
+app.mount("/static", StaticFiles(directory="./app/static"), name="static")
 
 @app.get("/")
 async def read_root():

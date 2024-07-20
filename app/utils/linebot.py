@@ -115,7 +115,7 @@ def flex_one_mail(data, msg_id):
     _message = get_(data, "message", "No Message")
     _importance = data["importance"]
     _category = data["category"]
-    _importance_index = 3 - LABELS_IMPORTANCE.index(_importance)
+    _importance_index = 3
     _is_English = data.get("is_English", False)
     print(data)
     print(_to)
