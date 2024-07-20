@@ -26,6 +26,7 @@ from email.parser import BytesParser
 
 from asyncio import sleep, gather
 import asyncio
+import aiohttp
 
 import requests
 from urllib.parse import quote_plus
@@ -112,7 +113,8 @@ async def service_from_userid(user_id: str, db:Session=Depends(get_db)):
         client_id=CLIENT_ID,
         client_secret=CLIENT_SECRET
         )
-        if credentials.expired:
+        flag = await fetch_test(user_auth.access_token)
+        if not flag:
             credentials.refresh(RequestGoogle())
             print("refreshed--------------")
             user_auth.access_token = credentials.token

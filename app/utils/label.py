@@ -22,7 +22,8 @@ async def classificate_email(msg:str):
     prompt = textwrap.dedent(f"""
         Classificate the following email in Japanese. You have to classify the email into the following categories:
         {LABELS_CATEGORY}, {LABELS_IMPORTANCE}.
-        Your classification should be based on the content of the email. Here are some examples:
+        Your classification should be based on the content of the email. The ideal classification ratio is 1:1:1:1 for the categories, and importance's ratio should be 1:3:3 (EMERGENCY: NORMAL: GARBAGE).
+        Here are some examples:
         - Email xx xx様 LINEヤフー株式会社 新卒採用担当です。 マイページへメッセージを送信しましたので ログインして内容をご確認下さい。
         - Reply "WORK, EMERGENCY"
         - Email こんにちは！サポーターズ運営事務局です。本日は、 技育CAMPアカデミアのご案内です。技育CAMPアカデミアでは、年間を通じて週1,2回のペースでオンライン技術勉強会を実施しています。
@@ -43,10 +44,9 @@ async def classificate_email(msg:str):
         category = "APPOINTMENT"
     elif "PROMOTIONS" in res:
         category = "PROMOTIONS"
-    elif "SPAM" in res:
-        category = "SPAM"
     else:
         category = "OTHER"
+        
     if "EMERGENCY" in res:
         importance = "EMERGENCY"
     elif "NORMAL" in res:
@@ -55,7 +55,7 @@ async def classificate_email(msg:str):
         importance = "GARBAGE"
     else:
         importance = "NORMAL"
-
+    print(res)
     return category, importance
 
 def convert_label_index_to_importance(label_index):

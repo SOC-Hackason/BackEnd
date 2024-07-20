@@ -22,13 +22,14 @@ from email import policy
 from email.parser import BytesParser
 
 from asyncio import sleep, gather
+from collections import defaultdict as ddict
 
 import requests
 from urllib.parse import quote_plus
 
 from app.settings import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, LINE_CHANNEL_TOKEN
 from app.schemas import OAuth2Code, FreeMessage, MailMessages
-from app.db import get_db, get_db_session
+from app.db import get_db, get_db
 from app.models import User_Auth, User_Line, User_Mail
 from app.utils.gmail import *
 from app.utils.gpt import *
@@ -46,24 +47,73 @@ msg_labels_importance = {}
 msg_labels_content = {}
 
 # cheating
-enlanguage_user = set()
+user_language = ddict(lambda: "Japanese")
+user_block_address = ddict(set)
 
 @router.get("/unread_titles")
-async def get_unread_title(background_tasks: BackgroundTasks, line_id:str, max_results: int = 12, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+async def get_unread_title(background_tasks: BackgroundTasks, line_id:str, max_results: int = 12, service=Depends(service_from_lineid), db: Session = Depends(get_db)):
     unread_messages = get_unread_message(service)
     msg_ids = [msg["id"] for msg in unread_messages["messages"]]
     msg_ids = msg_ids[:max_results]
     titles = await get_title_from_ids(service, msg_ids)
     # classify
     for msg_id in msg_ids:
-        asyncio.create_task(classify_email(msg_id, line_id, service, db))
+        asyncio.create_task(classify_email(msg_id, line_id, service))
 
     return {"message": titles, "msg_ids": msg_ids}
 
-async def classify_email(msg_id, line_id, service, db):
-    msg, _from, _to, _subject = await get_emails_summary_importance(msg_id, line_id, service, db)
-    await add_label_from_name_async(service, msg_id, msg.label_content)
-    await add_label_from_name_async(service, msg_id, msg.label_name)
+async def classify_email(msg_id, line_id, service):
+    # db session
+    async for db in get_db():
+        msg, _from, _to, _subject = await get_emails_summary_importance(msg_id, line_id, service, db, is_summarise=False)
+        await add_label_from_name_async(service, msg_id, msg.label_content)
+        await add_label_from_name_async(service, msg_id, msg.label_name)
+
+@router.get("/summary")
+async def get_summary(line_id:str, max_results:int = 6, service=Depends(service_from_lineid), db: Session = Depends(get_db)):
+    # get unread messages
+    unread_messages = get_unread_message(service)
+    msg_ids = [msg["id"] for msg in unread_messages["messages"]]
+    msg_ids = msg_ids[:max_results]
+    tasks = [get_message_from_id_async(service, msg_id) for msg_id in msg_ids]
+    messages = await gather(*tasks)
+    messages = [parse_message(msg) for msg in messages]
+    messages = [msg["body"][:1500] for msg in messages]
+    # get summary
+    user_id = await user_id_from_lineid(line_id, db)
+    language = user_language[user_id]
+    tasks = [summarise_email(msg, language=language) for msg in messages]
+    summaries = await gather(*tasks)
+    # classify
+    for msg_id in msg_ids:
+        asyncio.create_task(classify_email(msg_id, line_id, service))
+
+    
+    return {"message": summaries, "msg_ids": msg_ids}
+
+
+
+
+@router.get("/titles_importance")
+async def get_unread_title_importance(line_id:str, importance:str, max_results: int = 12, service=Depends(service_from_lineid), db: Session = Depends(get_db)):
+    # from db get message which have specified importance
+    user_id = await user_id_from_lineid(line_id, db)
+    query = select(User_Mail.mail_id).filter(and_(User_Mail.id == user_id, User_Mail.label_name == importance)).order_by(User_Mail.label_name.desc()).limit(max_results)
+    messages = await db.execute(query)
+    creds = service._http.credentials
+    msg_ids = messages.scalars().all()
+    titles = await get_title_from_ids(service, msg_ids)
+    return {"message": titles, "msg_ids": msg_ids}
+
+@router.get("/titles_content")
+async def get_unread_title_content(line_id:str, content:str, max_results: int = 12, service=Depends(service_from_lineid), db: Session = Depends(get_db)):
+    # from db get message which have specified content
+    user_id = await user_id_from_lineid(line_id, db)
+    query = select(User_Mail.mail_id).filter(and_(User_Mail.id == user_id, User_Mail.label_content == content)).order_by(User_Mail.label_content.desc()).limit(max_results)
+    messages = await db.execute(query)
+    msg_ids = messages.scalars().all()
+    titles = await get_title_from_ids(service, msg_ids)
+    return {"message": titles, "msg_ids": msg_ids}
 
 @router.get("/reply")
 async def reply_mail(msg_id: str, order=None, service=Depends(service_from_lineid)):
@@ -73,22 +123,23 @@ async def reply_mail(msg_id: str, order=None, service=Depends(service_from_linei
 
 # メールを取得する
 @router.get("/emails")
-async def get_emails(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+async def get_emails(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db)):
     if not service:
         raise HTTPException(status_code=400, detail="Service is required")
     # activate service
     msg, _from, _to, _subject = await get_emails_summary_importance(msg_id, line_id, service, db)
-    return {"from": _from, "to": _to, "subject": _subject, "message": msg.summary, "category": msg.label_content, "importance": msg.label_name}
+    user_id = await user_id_from_lineid(line_id, db)
+    return {"from": _from, "to": _to, "subject": _subject, "message": msg.summary, "category": msg.label_content, "importance": msg.label_name, "is_English": user_language[user_id] != "Japanese"}
 
 @router.get("/emails_ml")
-async def get_emails_ml(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+async def get_emails_ml(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db)):
     if not service:
         raise HTTPException(status_code=400, detail="Service is required")
     msg, _from, _to, _subject = await get_emails_summary_importance_ml(msg_id, line_id, service, db)
     return {"from": _from, "to": _to, "subject": _subject, "message": msg.summary, "category": msg.label_content, "importance": msg.label_name}
 
 @router.get("/change_label")
-async def get_emails_ml(msg_id: str, line_id:str, label_type:str, label:int, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+async def get_emails_ml(msg_id: str, line_id:str, label_type:str, label:int, service=Depends(service_from_lineid), db: Session = Depends(get_db)):
     if not service:
         raise HTTPException(status_code=400, detail="Service is required")
     user_id = await user_id_from_lineid(line_id, db)
@@ -135,7 +186,7 @@ async def get_emails_ml(msg_id: str, line_id:str, label_type:str, label:int, ser
     return {"message": f"ラベルの変更に成功しました。"}
     
 @router.get("/emails_dev")
-async def get_emails_dev(line_id:str, msg_id:str=None, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+async def get_emails_dev(line_id:str, msg_id:str=None, service=Depends(service_from_lineid), db: Session = Depends(get_db)):
     if msg_id is not None:
         if (line_id, msg_id) not in labeled_msg_ids:
             labeled_msg_ids.add((line_id, msg_id))
@@ -190,16 +241,13 @@ async def get_email_ids(service=Depends(service_from_lineid), next_page_token:st
     return {"message": ids, "next_page_token": next_page_token}
 
 @router.get("/change_language")
-async def change_language(line_id:str, language:str, db: Session = Depends(get_db_session)):
+async def change_language(line_id:str, language:str, db: Session = Depends(get_db)):
     user_id = await user_id_from_lineid(line_id, db)
-    if language == "English":
-        enlanguage_user.add(user_id)
-    else:
-        enlanguage_user.discard(user_id)
+    user_language[user_id] = language
     return {"message": "success"}
     
 @router.get("/vectorize")
-async def vectorize_email_api(msg_id:str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+async def vectorize_email_api(msg_id:str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db)):
     message = await get_message_from_id_async(service, msg_id)
     message = parse_message(message)
     message["body"] = message["body"][:500]
@@ -207,21 +255,28 @@ async def vectorize_email_api(msg_id:str, line_id:str, service=Depends(service_f
     return {"vector": res, "message": message}
     
 @router.get("/block_address")
-async def block_address(line_id: str, address: str, service=Depends(service_from_lineid)):
+async def block_address(line_id: str, address: str, addressname:str, service=Depends(service_from_lineid)):
+    address_with_name = f"{addressname} <{address}>"
+    user_block_address[line_id].add(address_with_name)
     await block_address_(service, address)
     return {"message": "blocked"}
 
 @router.get("/unblock_address")
-async def unblock_address(address: str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+async def unblock_address(line_id:str, address: str, service=Depends(service_from_lineid), db: Session = Depends(get_db)):
+    user_block_address[line_id].discard(address)
     await unblock_address_(service, address)
     return {"message": "unblocked"}
+
+@router.get("/block_address_list")
+async def block_address_list(line_id:str):
+    return {"message": user_block_address[line_id]}
 
 @router.get("/recent_addresses")
 async def get_recent_addresses(service=Depends(service_from_lineid)):
     addresses = await get_recent_addresses_(service)
     return {"message": addresses}
 
-async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session), is_summarise: bool = True):
+async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db), is_summarise: bool = True):
     
     user_id = await user_id_from_lineid(line_id, db)
     
@@ -235,11 +290,11 @@ async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depend
     _to = message["to"]
     _subject = message["subject"]
     
-    language = "English" if user_id in enlanguage_user else "Japanese"
+    language = user_language[user_id]
     
-    if not msg:
+    if msg is None:
         if is_summarise:
-            summary = await summarise_email(message, language)
+            summary = await summarise_email(message, language=language)
         else:
             summary = None
         category, importance = await classificate_email(message)
@@ -252,14 +307,14 @@ async def get_emails_summary_importance(msg_id: str, line_id:str, service=Depend
             msg.label_content = category
             msg.label_name = importance
         
-        if msg.summary is None and is_summarise:
-            msg.summary = await summarise_email(message, language)
+        if is_summarise:
+            msg.summary = await summarise_email(message, language=language)
         
         await db.commit()
         
     return msg, _from, _to, _subject
 
-async def get_emails_summary_importance_ml(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db_session)):
+async def get_emails_summary_importance_ml(msg_id: str, line_id:str, service=Depends(service_from_lineid), db: Session = Depends(get_db)):
     
     user_id = await user_id_from_lineid(line_id, db)
     

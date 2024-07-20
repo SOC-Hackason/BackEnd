@@ -100,11 +100,18 @@ async def unblock_address_(service, address):
     None\n
     """
     try:
-        f = service.users().settings().filters().delete(
-            userId='me',
-            id=address
-        )
-        await run_in_threadpool(f.execute)
+        filters = service.users().settings().filters().list(userId='me').execute
+        filters = await run_in_threadpool(filters)
+        filter_id = None
+
+        for filter in filters.get("filter", []):
+            if filter["criteria"]["from"] == address:
+                filter_id = filter["id"]
+                break
+
+        if filter_id:
+            f = service.users().settings().filters().delete(userId='me', id=filter_id)
+            await run_in_threadpool(f.execute)
     except Exception as e:
         print(e)
         return None
@@ -307,7 +314,7 @@ async def get_message_from_id(service, msg_ids:list):
     Returns:\n
     message: The fetched messages\n
     """
-    tasks = [get_message_from_id_(service, msg_id) for msg_id in msg_ids]
+    tasks = [get_message_from_id_async(service, msg_id) for msg_id in msg_ids]
     messages = await asyncio.gather(*tasks)
     return messages
     
@@ -320,6 +327,8 @@ async def get_title_from_ids(service, msg_ids:list):
     titles: The titles of the messages\n
     """
     messages = await get_message_from_id(service, msg_ids)
+    # remove none
+    messages = [message for message in messages if message]
     titles = [parse_message(message)["subject"] for message in messages]
     return titles
 
@@ -338,7 +347,7 @@ async def get_message_from_id_async(service, msg_id):
             async with session.get(url, headers=headers) as response:
                 if response.status == 200:
                     return await response.json()
-                else:
+                elif not response.status == 404:
                     credentials = service._http.credentials
                     print(credentials.expired)
                     print(credentials.valid)
@@ -346,7 +355,7 @@ async def get_message_from_id_async(service, msg_id):
                     return service.users().messages().get(userId='me', id=msg_id, format="raw").execute()
     except Exception as e:
         print(e)
-        return str(e)
+        return None
     
 
 
@@ -415,6 +424,19 @@ async def mark_as_read(service, msg_id):
     except Exception as e:
         print(e)
         return None
+    
+async def fetch_test(token):
+    # fetch email address
+    url = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
+    headers = {
+        'Authorization': f'Bearer {token}'
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            if response.status == 200:
+                return True
+            else:
+                return False
     
     
 async def classify_order(sentence: str):
