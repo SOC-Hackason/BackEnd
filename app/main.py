@@ -52,7 +52,7 @@ app.include_router(gmail, prefix="/gmail", tags=["gmail"])
 app.include_router(other, prefix="/other", tags=["other"])
 
 # static
-app.mount("/static", StaticFiles(directory="./app/static"), name="static")
+# app.mount("/static", StaticFiles(directory="./app/static"), name="static")
 
 @app.get("/")
 async def read_root():
