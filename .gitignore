@@ -10,3 +10,8 @@ __pycache__/
 *.gif
 *.jpg
 *.png
+
+app/labels_content.txt
+app/labeled_msg_ids.txt
+app/labels_importance.txt
+
